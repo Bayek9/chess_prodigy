@@ -920,10 +920,9 @@ class _ChessBoardPainter extends CustomPainter {
         final isLastEnd = lastTo == squareName;
 
         paint.color = isWhiteCell ? colors.lightSquaresColor : colors.darkSquaresColor;
-        if (isLastStart || isLastEnd) {
+        if (isLastStart || isLastEnd || isPressedStart) {
+          // Meme jaune pour "case pressee" et "dernier coup"
           paint.color = isWhiteCell ? _moveHighlightLight : _moveHighlightDark;
-        } else if (isPressedStart) {
-          paint.color = colors.startSquareColor;
         }
 
         final left = (col * cellSize).roundToDouble();
