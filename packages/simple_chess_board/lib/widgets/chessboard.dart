@@ -789,13 +789,13 @@ String coordinatesToSquareName(int file, int rank) {
 }
 
 class _ChessBoardPainter extends CustomPainter {
-  static const Color _moveLightYellow = Color.fromRGBO(245, 234, 113, 1);
-  static const Color _moveDarkYellow = Color.fromRGBO(219, 195, 75, 1);
+  static const Color _moveLightYellow = Color.fromRGBO(245, 234, 113, 1.0);
+  static const Color _moveDarkYellow = Color.fromRGBO(219, 195, 75, 1.0);
   static const double _dragPieceScale = 2.0; // x2
   static const double _dragLift = 0.12; // leger au-dessus du doigt
-  static const double _haloRadiusFactor = 0.55;
-  static const Color _indicatorLight = Color.fromARGB(120, 178, 168, 154);
-  static const Color _indicatorDark = Color.fromARGB(120, 138, 99, 71);
+  static const double _haloRadiusFactor = 0.56;
+  static const Color _indicatorLight = Color.fromARGB(120, 172, 160, 146);
+  static const Color _indicatorDark = Color.fromARGB(120, 132, 95, 68);
 
   final ChessBoardColors colors;
   final bool blackSideAtBottom;
