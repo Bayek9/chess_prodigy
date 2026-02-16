@@ -529,10 +529,41 @@ class _ChessboardState extends State<_Chessboard> {
   }
   Future<void> _handlePanEnd(DragEndDetails details) async {
     if (_dndDetails == null) return;
+
     final from = coordinatesToSquareName(
         _dndDetails!.startCell.$1, _dndDetails!.startCell.$2);
     final to = coordinatesToSquareName(
         _dndDetails!.endCell.$1, _dndDetails!.endCell.$2);
+
+    // IMPORTANT: clic / press sans déplacement => on sélectionne la pièce
+    // au lieu d'essayer un move from==to puis tout effacer.
+    if (from == to) {
+      final startCell = _dndDetails!.startCell;
+      final piece = _squares[from];
+      final isWhiteTurn = widget.fen.split(" ")[1] == "w";
+      final isPlayersPiece = piece != null &&
+          (isWhiteTurn
+              ? piece.color == BoardColor.white
+              : piece.color == BoardColor.black);
+
+      List<String> moves = [];
+      if (isPlayersPiece && widget.showPossibleMoves) {
+        final chessLogic = chess.Chess.fromFEN(widget.fen);
+        moves = chessLogic
+            .moves({'square': from, 'verbose': true})
+            .map<String>((m) => m['to'] as String)
+            .toList();
+      }
+
+      setState(() {
+        _dndDetails = null;
+        _tapStart = isPlayersPiece ? startCell : null;
+        _pressedFromSquare = isPlayersPiece ? from : null; // => case jaune au clic
+        _possibleMoves = moves;
+      });
+      return;
+    }
+
     final move = ShortMove(from: from, to: to);
 
     if (isPromoting(widget.fen, move)) {
@@ -1073,6 +1104,7 @@ class _ChessBoardPainter extends CustomPainter {
 
   void _drawSelectionHalo(Canvas canvas, Size size) {
     if (dragAndDropDetails == null) return;
+    if (dragAndDropDetails!.startCell == dragAndDropDetails!.endCell) return;
 
     final cellSize = size.shortestSide / 8;
     final file = dragAndDropDetails!.endCell.$1;
