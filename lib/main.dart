@@ -232,8 +232,8 @@ class BoardView extends StatelessWidget {
     required PieceType pieceType,
   }) onPromotionCommited;
 
-  static const Color _light = Color(0xFFD8C5A3);
-  static const Color _dark = Color(0xFFB68761);
+  static const Color _light = Color(0xFFEDD6AF);
+  static const Color _dark = Color(0xFFB88761);
 
   @override
   Widget build(BuildContext context) {
@@ -387,4 +387,3 @@ class _InsideCoords extends StatelessWidget {
     );
   }
 }
-
