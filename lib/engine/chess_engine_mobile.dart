@@ -4,7 +4,7 @@ import 'package:stockfish/stockfish.dart';
 
 import 'chess_engine.dart';
 
-class MobileChessEngine implements ChessEngine {
+class ChessEngineMobile implements ChessEngine {
   Stockfish? _engine;
   StreamSubscription<String>? _stdoutSubscription;
   Completer<String?>? _bestMoveCompleter;

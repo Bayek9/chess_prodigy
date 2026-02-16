@@ -3,6 +3,7 @@
 import 'package:chess/chess.dart' as chess;
 import 'package:flutter/material.dart';
 import 'package:simple_chess_board/simple_chess_board.dart';
+import 'package:chess_prodigy/widgets/suggestion_arrows_overlay.dart';
 
 import 'engine/chess_engine.dart';
 import 'engine/chess_engine_factory.dart';
@@ -37,6 +38,8 @@ class _ChessHomePageState extends State<ChessHomePage> {
   late final ChessEngine _engine;
 
   String _fen = chess.Chess.DEFAULT_POSITION;
+  BoardArrow? _lastMoveArrow;
+  final List<SuggestionArrow> _suggestionArrows = const [];
   bool _thinking = false;
   bool _engineReady = false;
 
@@ -104,6 +107,7 @@ class _ChessHomePageState extends State<ChessHomePage> {
 
     setState(() {
       _fen = _game.fen;
+      _lastMoveArrow = BoardArrow(from: from, to: to);
     });
     return true;
   }
@@ -173,6 +177,8 @@ class _ChessHomePageState extends State<ChessHomePage> {
       body: SafeArea(
         child: BoardView(
           fen: _fen,
+          lastMoveToHighlight: _lastMoveArrow,
+          suggestionArrows: _suggestionArrows,
           blackSideAtBottom: false,
           onMove: _onHumanMove,
           onPromote: () async => PieceType.queen,
@@ -199,6 +205,8 @@ class BoardView extends StatelessWidget {
   const BoardView({
     super.key,
     required this.fen,
+    required this.lastMoveToHighlight,
+    required this.suggestionArrows,
     required this.onMove,
     required this.blackSideAtBottom,
     required this.onPromote,
@@ -206,6 +214,8 @@ class BoardView extends StatelessWidget {
   });
 
   final String fen;
+  final BoardArrow? lastMoveToHighlight;
+  final List<SuggestionArrow> suggestionArrows;
   final bool blackSideAtBottom;
   final void Function(ShortMove move) onMove;
   final Future<PieceType?> Function() onPromote;
@@ -232,12 +242,13 @@ class BoardView extends StatelessWidget {
                   fen: fen,
                   blackSideAtBottom: blackSideAtBottom,
                   whitePlayerType: PlayerType.human,
-                  blackPlayerType: PlayerType.human,
+                  blackPlayerType: PlayerType.computer,
                   onMove: ({required ShortMove move}) => onMove(move),
                   onPromote: onPromote,
                   onPromotionCommited: onPromotionCommited,
                   showCoordinatesZone: false,
                   engineThinking: false,
+                  highlightLastMoveSquares: true,
                   showPossibleMoves: true,
                   normalMoveIndicatorBuilder: (cellSize) => Center(
                     child: Container(
@@ -262,7 +273,7 @@ class BoardView extends StatelessWidget {
                       ),
                     ),
                   ),
-                  lastMoveToHighlight: null,
+                  lastMoveToHighlight: lastMoveToHighlight,
                   cellHighlights: const <String, Color>{},
                   chessBoardColors: ChessBoardColors()
                     ..lightSquaresColor = _light
@@ -272,6 +283,13 @@ class BoardView extends StatelessWidget {
                     ..coordinatesZoneColor = Colors.transparent
                     ..coordinatesColor = Colors.transparent,
                   onTap: ({required String cellCoordinate}) {},
+                ),
+                Positioned.fill(
+                  child: SuggestionArrowsOverlay(
+                    arrows: suggestionArrows,
+                    blackSideAtBottom: blackSideAtBottom,
+                    boardPadding: 0,
+                  ),
                 ),
                 IgnorePointer(
                   child: _InsideCoords(

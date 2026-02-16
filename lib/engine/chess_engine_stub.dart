@@ -4,7 +4,7 @@ import 'package:chess/chess.dart' as chess;
 
 import 'chess_engine.dart';
 
-class StubChessEngine implements ChessEngine {
+class ChessEngineStub implements ChessEngine {
   final Random _random = Random();
   chess.Chess _board = chess.Chess();
 
