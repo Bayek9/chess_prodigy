@@ -800,8 +800,6 @@ String coordinatesToSquareName(int file, int rank) {
 }
 
 class _ChessBoardPainter extends CustomPainter {
-  static const Color _moveHighlightLight = Color(0xFFF5EA71);
-  static const Color _moveHighlightDark = Color(0xFFDCC34B);
   static const double _dragPieceScale = 2.0; // x2
   static const double _dragLift = 0.12; // leger au-dessus du doigt
   static const double _haloRadiusFactor = 0.728;
@@ -890,12 +888,13 @@ class _ChessBoardPainter extends CustomPainter {
 
         final isStartSquare = isPressedStart || isLastStart;
         final isEndSquare = isLastEnd;
-        final isDarkSquare = !isWhiteCell;
 
         paint.color = isWhiteCell ? colors.lightSquaresColor : colors.darkSquaresColor;
-        if (isStartSquare || isEndSquare) {
-          paint.color =
-              isDarkSquare ? _moveHighlightDark : _moveHighlightLight;
+        if (isStartSquare) {
+          paint.color = colors.startSquareColor;
+        }
+        if (isEndSquare) {
+          paint.color = colors.endSquareColor;
         }
 
         final left = (col * cellSize).roundToDouble();
@@ -1175,6 +1174,7 @@ class _ChessBoardPainter extends CustomPainter {
 /*
 Adapted from https://www.codeproject.com/Questions/125049/Draw-an-arrow-with-big-cap */
 const files = ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h'];
+
 
 
 
