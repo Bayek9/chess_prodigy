@@ -147,6 +147,14 @@ class _ChessHomePageState extends State<ChessHomePage> {
     }
   }
 
+  void _queueAiMove() {
+    Future<void>(() async {
+      await Future<void>.delayed(const Duration(milliseconds: 280));
+      if (!mounted || _game.game_over) return;
+      await _requestAiMove();
+    });
+  }
+
   Future<void> _onHumanMove(ShortMove move) async {
     if (_thinking || _game.game_over || _game.turn != chess.Color.WHITE) {
       return;
@@ -158,9 +166,7 @@ class _ChessHomePageState extends State<ChessHomePage> {
       promotionPiece: move.promotion,
     );
     if (!applied || _game.game_over) return;
-    await Future<void>.delayed(const Duration(milliseconds: 300));
-    if (!mounted || _game.game_over) return;
-    await _requestAiMove();
+    _queueAiMove();
   }
 
   @override
@@ -195,7 +201,7 @@ class _ChessHomePageState extends State<ChessHomePage> {
               promotionPiece: pieceType,
             );
             if (!applied || _game.game_over) return;
-            _requestAiMove();
+            _queueAiMove();
           },
         ),
       ),
@@ -280,11 +286,9 @@ class BoardView extends StatelessWidget {
                   chessBoardColors: ChessBoardColors()
                     ..lightSquaresColor = _light
                     ..darkSquaresColor = _dark
-                    ..startSquareColor = const Color(0xFFF5EA71)
-                        .withValues(alpha: 0.78)
-                    ..endSquareColor = const Color(0xFFDCC34B)
-                        .withValues(alpha: 0.78)
-                    ..lastMoveArrowColor = const Color(0xFFE53935)
+                    ..startSquareColor = Colors.transparent
+                    ..endSquareColor = Colors.transparent
+                    ..lastMoveArrowColor = Colors.transparent
                     ..coordinatesZoneColor = Colors.transparent
                     ..coordinatesColor = Colors.transparent,
                   onTap: ({required String cellCoordinate}) {},

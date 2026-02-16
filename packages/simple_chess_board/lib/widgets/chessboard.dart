@@ -805,6 +805,8 @@ class _ChessBoardPainter extends CustomPainter {
   static const double _haloRadiusFactor = 0.728;
   static const Color _indicatorLight = Color.fromARGB(120, 172, 160, 146);
   static const Color _indicatorDark = Color.fromARGB(120, 132, 95, 68);
+  static const Color _moveHighlightLight = Color(0xFFF5EA71); // blanc
+  static const Color _moveHighlightDark = Color(0xFFDBC34B); // noir
 
   final ChessBoardColors colors;
   final bool blackSideAtBottom;
@@ -886,15 +888,11 @@ class _ChessBoardPainter extends CustomPainter {
         final isLastStart = lastFrom == squareName;
         final isLastEnd = lastTo == squareName;
 
-        final isStartSquare = isPressedStart || isLastStart;
-        final isEndSquare = isLastEnd;
-
         paint.color = isWhiteCell ? colors.lightSquaresColor : colors.darkSquaresColor;
-        if (isStartSquare) {
+        if (isLastStart || isLastEnd) {
+          paint.color = isWhiteCell ? _moveHighlightLight : _moveHighlightDark;
+        } else if (isPressedStart) {
           paint.color = colors.startSquareColor;
-        }
-        if (isEndSquare) {
-          paint.color = colors.endSquareColor;
         }
 
         final left = (col * cellSize).roundToDouble();
@@ -1077,8 +1075,8 @@ class _ChessBoardPainter extends CustomPainter {
     if (dragAndDropDetails == null) return;
 
     final cellSize = size.shortestSide / 8;
-    final file = dragAndDropDetails!.startCell.$1;
-    final rank = dragAndDropDetails!.startCell.$2;
+    final file = dragAndDropDetails!.endCell.$1;
+    final rank = dragAndDropDetails!.endCell.$2;
 
     final col = blackSideAtBottom ? 7 - file : file;
     final row = blackSideAtBottom ? rank : 7 - rank;
