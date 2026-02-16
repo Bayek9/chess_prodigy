@@ -832,6 +832,7 @@ String coordinatesToSquareName(int file, int rank) {
 
 class _ChessBoardPainter extends CustomPainter {
   static const double _dragPieceScale = 2.0; // x2
+  static const double _dragPieceScaleY = 1.08; // +8% de hauteur sur Y pendant le drag
   static const double _dragLift = 0.12; // leger au-dessus du doigt
   static const double _haloRadiusFactor = 0.728;
   static const Color _indicatorLight = Color.fromARGB(120, 172, 160, 146);
@@ -1132,19 +1133,27 @@ class _ChessBoardPainter extends CustomPainter {
     final pieceDefinition = piecesDefinition[dragAndDropDetails!.movedPiece.name];
     if (pieceDefinition == null) return;
 
-    final pieceSize = cellSize * _dragPieceScale;
+    // Zoom general (deja present)
+    final pieceWidth = cellSize * _dragPieceScale;
+
+    // Hauteur legerement augmentee sur l'axe Y
+    final pieceHeight = pieceWidth * _dragPieceScaleY;
+
     final center = Offset(
       dragAndDropDetails!.position.$1,
       dragAndDropDetails!.position.$2,
     );
     final topLeft = Offset(
-      center.dx - pieceSize / 2,
-      center.dy - pieceSize / 2,
+      center.dx - pieceWidth / 2,
+      center.dy - pieceHeight / 2,
     );
 
     canvas.save();
     canvas.translate(topLeft.dx, topLeft.dy);
-    canvas.scale(pieceSize / baseImageSize, pieceSize / baseImageSize);
+    canvas.scale(
+      pieceWidth / baseImageSize,
+      pieceHeight / baseImageSize, // sy > sx => piece un peu plus haute
+    );
 
     for (var vectorElement in pieceDefinition) {
       vectorElement.paintIntoCanvas(canvas, vectorElement.drawingParameters);
