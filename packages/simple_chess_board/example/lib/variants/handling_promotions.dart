@@ -1,7 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:chess/chess.dart' as chesslib;
 import 'package:simple_chess_board/simple_chess_board.dart';
-import 'package:chess_vectors_flutter/chess_vectors_flutter.dart';
 
 class HandlingPromotionsBoard extends StatefulWidget {
   const HandlingPromotionsBoard({super.key});
@@ -26,11 +25,29 @@ class _HandlingPromotionsBoardState extends State<HandlingPromotionsBoard> {
     }
   }
 
+  Widget _promotionTile({
+    required PieceType pieceType,
+    required String label,
+  }) {
+    return InkWell(
+      onTap: () => Navigator.of(context).pop(pieceType),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(vertical: 8),
+        child: Center(
+          child: Text(
+            label,
+            style: const TextStyle(fontSize: 20, fontWeight: FontWeight.w600),
+          ),
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: Text("Handling promotions"),
+        title: const Text('Handling promotions'),
       ),
       body: Center(
         child: SizedBox(
@@ -51,54 +68,14 @@ class _HandlingPromotionsBoardState extends State<HandlingPromotionsBoard> {
                 context: context,
                 builder: (_) {
                   return AlertDialog(
-                    title: Text('Promotion'),
+                    title: const Text('Promotion'),
                     content: Column(
                       mainAxisSize: MainAxisSize.min,
                       children: [
-                        InkWell(
-                          child: _chess.turn == chesslib.Color.WHITE
-                              ? WhiteQueen(
-                                  size: 60,
-                                )
-                              : BlackQueen(
-                                  size: 60,
-                                ),
-                          onTap: () =>
-                              Navigator.of(context).pop(PieceType.queen),
-                        ),
-                        InkWell(
-                          child: _chess.turn == chesslib.Color.WHITE
-                              ? WhiteRook(
-                                  size: 60,
-                                )
-                              : BlackRook(
-                                  size: 60,
-                                ),
-                          onTap: () =>
-                              Navigator.of(context).pop(PieceType.rook),
-                        ),
-                        InkWell(
-                          child: _chess.turn == chesslib.Color.WHITE
-                              ? WhiteBishop(
-                                  size: 60,
-                                )
-                              : BlackBishop(
-                                  size: 60,
-                                ),
-                          onTap: () =>
-                              Navigator.of(context).pop(PieceType.bishop),
-                        ),
-                        InkWell(
-                          child: _chess.turn == chesslib.Color.WHITE
-                              ? WhiteKnight(
-                                  size: 60,
-                                )
-                              : BlackKnight(
-                                  size: 60,
-                                ),
-                          onTap: () =>
-                              Navigator.of(context).pop(PieceType.knight),
-                        ),
+                        _promotionTile(pieceType: PieceType.queen, label: 'Queen'),
+                        _promotionTile(pieceType: PieceType.rook, label: 'Rook'),
+                        _promotionTile(pieceType: PieceType.bishop, label: 'Bishop'),
+                        _promotionTile(pieceType: PieceType.knight, label: 'Knight'),
                       ],
                     ),
                   );

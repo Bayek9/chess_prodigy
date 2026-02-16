@@ -1,9 +1,9 @@
 import 'package:flutter/material.dart';
-import 'package:simple_chess_board_usage/chess_board_with_history.dart';
-import 'package:simple_chess_board_usage/variants/custom_move_indicator.dart';
-import 'package:simple_chess_board_usage/variants/handling_promotions.dart';
-import 'package:simple_chess_board_usage/variants/interactive.dart';
-import 'package:simple_chess_board_usage/variants/simple.dart';
+import 'chess_board_with_history.dart';
+import 'variants/custom_move_indicator.dart';
+import 'variants/handling_promotions.dart';
+import 'variants/interactive.dart';
+import 'variants/simple.dart';
 
 void main() {
   runApp(const MyApp());
@@ -32,31 +32,31 @@ class MyHomePage extends StatelessWidget {
 
   Future<void> _goToSimpleBoard(BuildContext context) async {
     await Navigator.of(context).push(MaterialPageRoute(builder: (context) {
-      return SimpleBoardVariant();
+      return const SimpleBoardVariant();
     }));
   }
 
   Future<void> _goToInteractiveBoard(BuildContext context) async {
     await Navigator.of(context).push(MaterialPageRoute(builder: (context) {
-      return InteractiveBoard();
+      return const InteractiveBoard();
     }));
   }
 
   Future<void> _goToCustomIndicatorsBoard(BuildContext context) async {
     await Navigator.of(context).push(MaterialPageRoute(builder: (context) {
-      return CustomMoveIndicator();
+      return const CustomMoveIndicator();
     }));
   }
 
   Future<void> _goToPromotionHandling(BuildContext context) async {
     await Navigator.of(context).push(MaterialPageRoute(builder: (context) {
-      return HandlingPromotionsBoard();
+      return const HandlingPromotionsBoard();
     }));
   }
 
   Future<void> _goToHistoryExample(BuildContext context) async {
     await Navigator.of(context).push(MaterialPageRoute(builder: (context) {
-      return ChessBoardWithHistory();
+      return const ChessBoardWithHistory();
     }));
   }
 
@@ -64,7 +64,7 @@ class MyHomePage extends StatelessWidget {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: Text("Simple chess board demo"),
+        title: const Text('Simple chess board demo'),
       ),
       body: Center(
         child: Column(
@@ -75,23 +75,23 @@ class MyHomePage extends StatelessWidget {
           children: [
             ElevatedButton(
               onPressed: () => _goToSimpleBoard(context),
-              child: Text("See simple board"),
+              child: const Text('See simple board'),
             ),
             ElevatedButton(
               onPressed: () => _goToInteractiveBoard(context),
-              child: Text("See interactive board"),
+              child: const Text('See interactive board'),
             ),
             ElevatedButton(
               onPressed: () => _goToCustomIndicatorsBoard(context),
-              child: Text("See custom indicators board"),
+              child: const Text('See custom indicators board'),
             ),
             ElevatedButton(
               onPressed: () => _goToPromotionHandling(context),
-              child: Text("See nicer promotion handling"),
+              child: const Text('See nicer promotion handling'),
             ),
             ElevatedButton(
               onPressed: () => _goToHistoryExample(context),
-              child: Text("See history example"),
+              child: const Text('See history example'),
             ),
           ],
         ),
