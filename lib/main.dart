@@ -42,6 +42,7 @@ class _ChessHomePageState extends State<ChessHomePage> {
   final List<SuggestionArrow> _suggestionArrows = const [];
   bool _thinking = false;
   bool _engineReady = false;
+  double _targetElo = 1200;
 
   @override
   void initState() {
@@ -55,6 +56,7 @@ class _ChessHomePageState extends State<ChessHomePage> {
     try {
       await _engine.init();
       await _engine.setPosition(_game.fen);
+      await _engine.setStrength(_targetElo.round());
       if (mounted) {
         setState(() {
           _engineReady = true;
@@ -70,6 +72,18 @@ class _ChessHomePageState extends State<ChessHomePage> {
   }
 
   bool _isBlackTurn() => _game.turn == chess.Color.BLACK;
+
+  Future<void> _applyEngineStrength(int elo) async {
+    if (!_engineReady) return;
+    await _engine.setStrength(elo);
+  }
+
+  int _goMoveTimeForElo(int elo) {
+    if (elo < 1320) return 80;
+    if (elo < 1800) return 200;
+    if (elo < 2400) return 400;
+    return 800;
+  }
 
   String? _pieceTypeToPromotion(PieceType? pieceType) {
     if (pieceType == null) return null;
@@ -123,7 +137,7 @@ class _ChessHomePageState extends State<ChessHomePage> {
     if (_engineReady) {
       try {
         await _engine.setPosition(_game.fen);
-        uciMove = await _engine.bestMove(700);
+        uciMove = await _engine.bestMove(_goMoveTimeForElo(_targetElo.round()));
       } catch (_) {
         uciMove = null;
       }
@@ -183,26 +197,49 @@ class _ChessHomePageState extends State<ChessHomePage> {
       ),
       backgroundColor: const Color(0xFF1E1E1E),
       body: SafeArea(
-        child: BoardView(
-          fen: _fen,
-          lastMoveToHighlight: _lastMoveArrow,
-          suggestionArrows: _suggestionArrows,
-          blackSideAtBottom: false,
-          onMove: _onHumanMove,
-          onPromote: () async => PieceType.queen,
-          onPromotionCommited: ({
-            required ShortMove moveDone,
-            required PieceType pieceType,
-          }) {
-            if (_thinking || _game.game_over) return;
-            final applied = _applyMove(
-              from: moveDone.from,
-              to: moveDone.to,
-              promotionPiece: pieceType,
-            );
-            if (!applied || _game.game_over) return;
-            _queueAiMove();
-          },
+        child: Column(
+          children: [
+            Expanded(
+              child: BoardView(
+                fen: _fen,
+                lastMoveToHighlight: _lastMoveArrow,
+                suggestionArrows: _suggestionArrows,
+                blackSideAtBottom: false,
+                onMove: _onHumanMove,
+                onPromote: () async => PieceType.queen,
+                onPromotionCommited: ({
+                  required ShortMove moveDone,
+                  required PieceType pieceType,
+                }) {
+                  if (_thinking || _game.game_over) return;
+                  final applied = _applyMove(
+                    from: moveDone.from,
+                    to: moveDone.to,
+                    promotionPiece: pieceType,
+                  );
+                  if (!applied || _game.game_over) return;
+                  _queueAiMove();
+                },
+              ),
+            ),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
+              child: Column(
+                children: [
+                  Text('Engine Elo: ${_targetElo.round()}'),
+                  Slider(
+                    min: 250,
+                    max: 3200,
+                    divisions: 295,
+                    value: _targetElo,
+                    label: _targetElo.round().toString(),
+                    onChanged: (v) => setState(() => _targetElo = v),
+                    onChangeEnd: (v) => _applyEngineStrength(v.round()),
+                  ),
+                ],
+              ),
+            ),
+          ],
         ),
       ),
     );

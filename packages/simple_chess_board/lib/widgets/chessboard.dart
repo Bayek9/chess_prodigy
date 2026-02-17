@@ -462,52 +462,52 @@ class _ChessboardState extends State<_Chessboard> {
   void _handlePanStart(DragStartDetails details) {
     if (!_isHumanTurn() || !widget.isInteractive) return;
 
-    int file;
-    int rank;
-    Piece? piece;
+    final cellSize = widget.size / 8;
+    final p = details.localPosition;
 
-    if (_tapStart != null) {
-      file = _tapStart!.$1;
-      rank = _tapStart!.$2;
-      piece = _squares[coordinatesToSquareName(file, rank)];
-    } else {
-      final cellsSize = widget.size / 8;
-      final position = details.localPosition;
-      final col = (position.dx ~/ cellsSize).clamp(0, 7);
-      final row = (position.dy ~/ cellsSize).clamp(0, 7);
+    final col = (p.dx ~/ cellSize).clamp(0, 7);
+    final row = (p.dy ~/ cellSize).clamp(0, 7);
 
-      file = widget.blackSideAtBottom ? 7 - col : col;
-      rank = widget.blackSideAtBottom ? row : 7 - row;
+    final file = widget.blackSideAtBottom ? 7 - col : col;
+    final rank = widget.blackSideAtBottom ? row : 7 - row;
 
-      piece = _squares[coordinatesToSquareName(file, rank)];
-    }
+    final from = coordinatesToSquareName(file, rank);
+    final piece = _squares[from];
 
     if (piece == null) return;
 
     final isWhiteTurn = widget.fen.split(" ")[1] == "w";
-    final isNotAPieceOfPlayerInTurn = isWhiteTurn
-        ? piece.color == BoardColor.black
-        : piece.color == BoardColor.white;
-    if (isNotAPieceOfPlayerInTurn) return;
+    final isPlayersPiece = isWhiteTurn
+        ? piece.color == BoardColor.white
+        : piece.color == BoardColor.black;
 
+    if (!isPlayersPiece) return;
+
+    List<String> moves = [];
     if (widget.showPossibleMoves) {
-      final squareName = coordinatesToSquareName(file, rank);
       final chessLogic = chess.Chess.fromFEN(widget.fen);
-      _possibleMoves = chessLogic
-          .moves({'square': squareName, 'verbose': true})
+      moves = chessLogic
+          .moves({'square': from, 'verbose': true})
           .map<String>((move) => move['to'] as String)
           .toList();
     }
 
     setState(() {
-      _pressedFromSquare = coordinatesToSquareName(file, rank);
+      _possibleMoves = moves;
+
+      // important: on reset l'ancienne sélection tap pour éviter la pièce "fantôme"
+      _tapStart = null;
+      _pressedFromSquare = from;
+
       _dndDetails = _DragAndDropDetails(
-        movedPiece: piece!,
+        movedPiece: piece,
         startCell: (file, rank),
-        position: (details.localPosition.dx, details.localPosition.dy),
+        position: (
+          p.dx,
+          p.dy - cellSize * _ChessBoardPainter._dragLift,
+        ),
       );
       _dndDetails!.endCell = (file, rank);
-      _tapStart = null;
     });
   }
 
@@ -832,11 +832,10 @@ String coordinatesToSquareName(int file, int rank) {
 
 class _ChessBoardPainter extends CustomPainter {
   static const double _dragPieceScale = 2.0; // x2
-  static const double _dragPieceScaleY = 1.08; // +8% de hauteur sur Y pendant le drag
-  static const double _dragLift = 0.12; // leger au-dessus du doigt
-  static const double _haloRadiusFactor = 0.728;
-  static const Color _indicatorLight = Color.fromARGB(120, 172, 160, 146);
-  static const Color _indicatorDark = Color.fromARGB(120, 132, 95, 68);
+  static const double _dragLift = 1; // plus haut au-dessus du pouce
+  static const double _haloRadiusFactor = 0.86; // halo un peu plus gros
+  static const Color _indicatorLight = Color.fromARGB(150, 172, 160, 146);
+  static const Color _indicatorDark = Color.fromARGB(150, 132, 95, 68);
   static const Color _moveHighlightLight = Color(0xFFF5EA71); // blanc
   static const Color _moveHighlightDark = Color(0xFFDBC34B); // noir
 
@@ -1133,27 +1132,20 @@ class _ChessBoardPainter extends CustomPainter {
     final pieceDefinition = piecesDefinition[dragAndDropDetails!.movedPiece.name];
     if (pieceDefinition == null) return;
 
-    // Zoom general (deja present)
-    final pieceWidth = cellSize * _dragPieceScale;
-
-    // Hauteur legerement augmentee sur l'axe Y
-    final pieceHeight = pieceWidth * _dragPieceScaleY;
+    final pieceSize = cellSize * _dragPieceScale;
 
     final center = Offset(
       dragAndDropDetails!.position.$1,
       dragAndDropDetails!.position.$2,
     );
     final topLeft = Offset(
-      center.dx - pieceWidth / 2,
-      center.dy - pieceHeight / 2,
+      center.dx - pieceSize / 2,
+      center.dy - pieceSize / 2,
     );
 
     canvas.save();
     canvas.translate(topLeft.dx, topLeft.dy);
-    canvas.scale(
-      pieceWidth / baseImageSize,
-      pieceHeight / baseImageSize, // sy > sx => piece un peu plus haute
-    );
+    canvas.scale(pieceSize / baseImageSize, pieceSize / baseImageSize); // uniforme (pas d'etirement)
 
     for (var vectorElement in pieceDefinition) {
       vectorElement.paintIntoCanvas(canvas, vectorElement.drawingParameters);
@@ -1187,11 +1179,11 @@ class _ChessBoardPainter extends CustomPainter {
         final ringPaint = Paint()
           ..color = indicatorColor
           ..style = PaintingStyle.stroke
-          ..strokeWidth = cellSize * 0.075;
+          ..strokeWidth = cellSize * 0.098;
 
         canvas.drawCircle(
           Offset(centerX, centerY),
-          cellSize * 0.45,
+          cellSize * 0.438,
           ringPaint,
         );
       } else {
@@ -1212,7 +1204,5 @@ class _ChessBoardPainter extends CustomPainter {
 /*
 Adapted from https://www.codeproject.com/Questions/125049/Draw-an-arrow-with-big-cap */
 const files = ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h'];
-
-
 
 

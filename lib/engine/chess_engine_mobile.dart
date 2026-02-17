@@ -30,6 +30,30 @@ class ChessEngineMobile implements ChessEngine {
   }
 
   @override
+  Future<void> setStrength(int elo) async {
+    if (!_ready || _engine == null) return;
+
+    if (elo >= 1320 && elo <= 3190) {
+      _engine!.stdin = 'setoption name UCI_LimitStrength value true';
+      _engine!.stdin = 'setoption name UCI_Elo value $elo';
+    } else if (elo > 3190) {
+      _engine!.stdin = 'setoption name UCI_LimitStrength value false';
+      _engine!.stdin = 'setoption name Skill Level value 20';
+    } else {
+      _engine!.stdin = 'setoption name UCI_LimitStrength value false';
+      final skill = _mapEloToSkill(elo);
+      _engine!.stdin = 'setoption name Skill Level value $skill';
+    }
+
+    _engine!.stdin = 'isready';
+  }
+
+  int _mapEloToSkill(int elo) {
+    final t = ((elo - 250) / (1319 - 250)).clamp(0.0, 1.0);
+    return (t * 8).round();
+  }
+
+  @override
   Future<String?> bestMove(int moveTimeMs) async {
     if (!_ready || _engine == null) return null;
 

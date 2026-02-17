@@ -21,6 +21,9 @@ class ChessEngineStub implements ChessEngine {
   }
 
   @override
+  Future<void> setStrength(int elo) async {}
+
+  @override
   Future<String?> bestMove(int moveTimeMs) async {
     final moves = _board.moves({'verbose': true});
     if (moves.isEmpty) return null;
