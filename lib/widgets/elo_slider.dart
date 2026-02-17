@@ -1,138 +1,125 @@
+import 'dart:math' as math;
 import 'package:flutter/material.dart';
 
 class EloSlider extends StatelessWidget {
   const EloSlider({
     super.key,
     required this.value,
+    required this.marks,
     required this.onChanged,
-    required this.onChangeEnd,
-    this.min = 250,
-    this.max = 3200,
-    this.marks = const [250, 1000, 1600, 2000, 2400, 3200],
+    this.onChangeEnd,
   });
 
   final int value;
-  final int min;
-  final int max;
   final List<int> marks;
   final ValueChanged<int> onChanged;
-  final ValueChanged<int> onChangeEnd;
-
-  double _t(int v) => (v - min) / (max - min);
-
-  int _snap100(double raw) {
-    final x = raw.clamp(min.toDouble(), max.toDouble());
-
-    if (x < 275) return min;
-
-    int snapped = ((x / 100).round() * 100).clamp(300, max);
-
-    if (x >= max - 50) snapped = max;
-
-    return snapped;
-  }
+  final ValueChanged<int>? onChangeEnd;
 
   @override
   Widget build(BuildContext context) {
-    final v = value.clamp(min, max);
-    final displayValue = _snap100(v.toDouble());
+    final sortedMarks = marks.toSet().toList()..sort();
+    if (sortedMarks.length < 2) {
+      return const SizedBox.shrink();
+    }
 
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        SizedBox(
-          height: 42,
-          child: LayoutBuilder(
-            builder: (context, c) {
-              const horizontalPad = 12.0;
-              final trackW = c.maxWidth - horizontalPad * 2;
+    final minValue = sortedMarks.first;
+    final maxValue = sortedMarks.last;
+    final clampedValue = value.clamp(minValue, maxValue);
 
-              return Stack(
-                alignment: Alignment.center,
-                children: [
-                  Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: horizontalPad),
-                    child: SliderTheme(
-                      data: SliderTheme.of(context).copyWith(
-                        trackHeight: 4,
-                        activeTrackColor: const Color(0xFF6CC04A),
-                        inactiveTrackColor: const Color(0xFF6B6B6B),
-                        thumbColor: Colors.white,
-                        overlayColor: Colors.transparent,
-                        overlayShape: SliderComponentShape.noOverlay,
-                        tickMarkShape: SliderTickMarkShape.noTickMark,
-                      ),
-                      child: Slider(
-                        min: min.toDouble(),
-                        max: max.toDouble(),
-                        value: v.toDouble(),
-                        divisions: null,
-                        label: '$displayValue',
-                        onChanged: (x) => onChanged(_snap100(x)),
-                        onChangeEnd: (x) => onChangeEnd(_snap100(x)),
-                      ),
-                    ),
-                  ),
-                  Positioned.fill(
-                    child: IgnorePointer(
-                      child: Padding(
-                        padding: const EdgeInsets.symmetric(horizontal: horizontalPad),
-                        child: Stack(
-                          children: [
-                            for (final m in marks)
-                              Positioned(
-                                left: (trackW * _t(m)).clamp(0.0, trackW) - 0.5,
-                                top: 18,
-                                child: Container(
-                                  width: 1,
-                                  height: 10,
-                                  color: const Color(0xFF8A8A8A),
-                                ),
-                              ),
-                          ],
-                        ),
-                      ),
-                    ),
-                  ),
-                ],
-              );
-            },
-          ),
-        ),
-        const SizedBox(height: 6),
-        SizedBox(
-          height: 18,
-          child: LayoutBuilder(
-            builder: (context, c) {
-              const horizontalPad = 12.0;
-              final trackW = c.maxWidth - horizontalPad * 2;
+    // Style demandé
+    const double thumbRadius = 16; // plus gros bouton
+    const double trackHeight = 10; // barre plus épaisse
 
-              return Padding(
-                padding: const EdgeInsets.symmetric(horizontal: horizontalPad),
-                child: Stack(
-                  children: [
-                    for (final m in marks)
-                      Positioned(
-                        left: (trackW * _t(m)).clamp(0.0, trackW) - 18,
-                        child: SizedBox(
-                          width: 36,
-                          child: Text(
-                            '$m',
-                            textAlign: TextAlign.center,
-                            style: const TextStyle(
-                              fontSize: 12,
-                              color: Color(0xFFBEBEBE),
-                            ),
-                          ),
-                        ),
-                      ),
-                  ],
+    final TextStyle labelStyle =
+        Theme.of(context).textTheme.bodySmall?.copyWith(
+              color: const Color(0xFFBEBEBE),
+              fontSize: 12,
+            ) ??
+            const TextStyle(
+              color: Color(0xFFBEBEBE),
+              fontSize: 12,
+            );
+
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final totalWidth = constraints.maxWidth;
+
+        // Avec RoundedRectSliderTrackShape, la track est paddée par le plus grand
+        // rayon entre overlay et thumb. Comme overlay = noOverlay, on prend thumbRadius.
+        final trackStart = thumbRadius;
+        final trackWidth = math.max(0.0, totalWidth - (trackStart * 2));
+
+        final labels = <Widget>[];
+        for (final mark in sortedMarks) {
+          final ratio = (mark - minValue) / (maxValue - minValue);
+          final x = trackStart + ratio * trackWidth;
+
+          final text = '$mark';
+          final painter = TextPainter(
+            text: TextSpan(text: text, style: labelStyle),
+            textDirection: Directionality.of(context),
+            maxLines: 1,
+          )..layout();
+
+          final left = (x - painter.width / 2)
+              .clamp(0.0, math.max(0.0, totalWidth - painter.width))
+              .toDouble();
+
+          labels.add(
+            Positioned(
+              left: left,
+              top: 0,
+              child: Text(text, style: labelStyle),
+            ),
+          );
+        }
+
+        return Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            SliderTheme(
+              data: SliderTheme.of(context).copyWith(
+                // Bouts arrondis + barre épaisse
+                trackShape: const RoundedRectSliderTrackShape(),
+                trackHeight: trackHeight,
+
+                // Gros thumb rond
+                thumbShape: const RoundSliderThumbShape(
+                  enabledThumbRadius: thumbRadius,
+                  disabledThumbRadius: thumbRadius,
                 ),
-              );
-            },
-          ),
-        ),
-      ],
+
+                // Pas de halo
+                overlayShape: SliderComponentShape.noOverlay,
+
+                // IMPORTANT : aucune barre de graduation sur la track
+                tickMarkShape: SliderTickMarkShape.noTickMark,
+
+                // Couleurs (tu peux ajuster)
+                activeTrackColor: const Color(0xFF8FD46A),
+                inactiveTrackColor: const Color(0xFF7B7B7B),
+                thumbColor: const Color(0xFFEFEFEF),
+              ),
+              child: Slider(
+                min: minValue.toDouble(),
+                max: maxValue.toDouble(),
+                value: clampedValue.toDouble(),
+
+                // Pas de divisions => slider continu, donc pas de ticks auto
+                // (et on garde noTickMark pour forcer l'absence de traits)
+                onChanged: (v) => onChanged(v.round()),
+                onChangeEnd:
+                    onChangeEnd == null ? null : (v) => onChangeEnd!(v.round()),
+              ),
+            ),
+            const SizedBox(height: 6),
+            SizedBox(
+              height: 18,
+              child: Stack(children: labels),
+            ),
+          ],
+        );
+      },
     );
   }
 }

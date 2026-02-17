@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:math' as math;
 
 import 'package:chess/chess.dart' as chess;
@@ -44,7 +45,9 @@ class _ChessHomePageState extends State<ChessHomePage> {
   bool _thinking = false;
   bool _engineReady = false;
   int _engineElo = 1200;
-  static const List<int> _eloTicks = <int>[250, 850, 1000, 1400, 1500, 2100, 2200, 2450, 3200];
+  static const List<int> _eloTicks = <int>[250, 1000, 1600, 2000, 2400, 3200];
+  Timer? _aiDebounceTimer;
+  int _aiRequestToken = 0;
 
   @override
   void initState() {
@@ -116,8 +119,8 @@ class _ChessHomePageState extends State<ChessHomePage> {
     return true;
   }
 
-  Future<void> _requestAiMove() async {
-    if (_thinking || !_isBlackTurn() || _game.game_over) return;
+  Future<void> _requestAiMove({required int token}) async {
+    if (token != _aiRequestToken || _thinking || !_isBlackTurn() || _game.game_over) return;
 
     setState(() {
       _thinking = true;
@@ -134,6 +137,15 @@ class _ChessHomePageState extends State<ChessHomePage> {
     }
 
     if (!mounted) return;
+
+    // Si une requête plus récente existe, on ignore ce résultat.
+    if (token != _aiRequestToken) {
+      setState(() {
+        _thinking = false;
+      });
+      return;
+    }
+
     if (uciMove != null &&
         uciMove.length >= 4 &&
         _isBlackTurn() &&
@@ -152,10 +164,12 @@ class _ChessHomePageState extends State<ChessHomePage> {
   }
 
   void _queueAiMove() {
-    Future<void>(() async {
-      await Future<void>.delayed(const Duration(milliseconds: 280));
+    _aiDebounceTimer?.cancel(); // annule l'ancienne demande
+    final token = ++_aiRequestToken;
+
+    _aiDebounceTimer = Timer(const Duration(milliseconds: 280), () {
       if (!mounted || _game.game_over) return;
-      await _requestAiMove();
+      unawaited(_requestAiMove(token: token));
     });
   }
 
@@ -175,7 +189,8 @@ class _ChessHomePageState extends State<ChessHomePage> {
 
   @override
   void dispose() {
-    _engine.dispose();
+    _aiDebounceTimer?.cancel();
+    unawaited(_engine.dispose());
     super.dispose();
   }
 
@@ -199,10 +214,10 @@ class _ChessHomePageState extends State<ChessHomePage> {
                     value: _engineElo,
                     marks: _eloTicks,
                     onChanged: (v) => setState(() => _engineElo = v),
-                    onChangeEnd: (v) {
+                    onChangeEnd: (v) async {
                       setState(() => _engineElo = v);
                       if (_engineReady) {
-                        _engine.setTargetElo(v);
+                        await _engine.setTargetElo(v);
                       }
                     },
                   ),
@@ -228,7 +243,7 @@ class _ChessHomePageState extends State<ChessHomePage> {
                     promotionPiece: pieceType,
                   );
                   if (!applied || _game.game_over) return;
-                  _requestAiMove();
+                  _queueAiMove();
                 },
               ),
             ),
