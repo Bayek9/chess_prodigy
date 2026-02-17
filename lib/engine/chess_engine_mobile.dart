@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:math' as math;
 
 import 'package:stockfish/stockfish.dart';
 
@@ -8,15 +9,70 @@ class ChessEngineMobile implements ChessEngine {
   Stockfish? _engine;
   StreamSubscription<String>? _stdoutSubscription;
   Completer<String?>? _bestMoveCompleter;
+  Completer<void>? _readyCompleter;
+  Completer<void>? _uciCompleter;
+
   bool _ready = false;
+  int _targetElo = 1200;
+
+  @override
+  int get targetElo => _targetElo;
+
+  void _send(String cmd) {
+    if (_engine != null) _engine!.stdin = cmd;
+  }
+
+  void _completeVoid(Completer<void>? c) {
+    if (c != null && !c.isCompleted) c.complete();
+  }
+
+  void _completeBestMove(Completer<String?>? c, String? value) {
+    if (c != null && !c.isCompleted) c.complete(value);
+  }
+
+  Future<void> _waitReady() async {
+    _completeVoid(_readyCompleter);
+    _readyCompleter = Completer<void>();
+    _send('isready');
+    await _readyCompleter!.future.timeout(
+      const Duration(seconds: 2),
+      onTimeout: () {},
+    );
+  }
+
+  Future<void> _waitUciOk() async {
+    _completeVoid(_uciCompleter);
+    _uciCompleter = Completer<void>();
+    _send('uci');
+    await _uciCompleter!.future.timeout(
+      const Duration(seconds: 2),
+      onTimeout: () {},
+    );
+  }
+
+  int _skillFromLowElo(int elo) {
+    final t = ((elo - 250) / (1320 - 250)).clamp(0.0, 1.0);
+    return (t * 6).round().clamp(0, 6);
+  }
+
+  int _effectiveMoveTimeMs(int baseMs) {
+    if (_targetElo >= 1320) return baseMs;
+    final t = ((_targetElo - 250) / (1320 - 250)).clamp(0.0, 1.0);
+    final factor = 0.25 + 0.75 * t;
+    return math.max(60, (baseMs * factor).round());
+  }
 
   @override
   Future<void> init() async {
     try {
-      final engine = await stockfishAsync();
-      _engine = engine;
+      _engine = await stockfishAsync();
+      _stdoutSubscription = _engine!.stdout.listen(_onLine);
+
+      await _waitUciOk();
+      await _waitReady();
+
       _ready = true;
-      _stdoutSubscription = engine.stdout.listen(_onLine);
+      await setTargetElo(_targetElo);
     } catch (_) {
       _ready = false;
       _engine = null;
@@ -24,47 +80,44 @@ class ChessEngineMobile implements ChessEngine {
   }
 
   @override
-  Future<void> setPosition(String fen) async {
-    if (!_ready || _engine == null) return;
-    _engine!.stdin = 'position fen $fen';
+  Future<void> setTargetElo(int elo) async {
+    _targetElo = elo.clamp(250, 3200);
+    if (_engine == null) return;
+
+    if (_targetElo >= 1320) {
+      final sfElo = _targetElo.clamp(1320, 3190);
+      _send('setoption name UCI_LimitStrength value true');
+      _send('setoption name UCI_Elo value $sfElo');
+      _send('setoption name MultiPV value 1');
+    } else {
+      final skill = _skillFromLowElo(_targetElo);
+      _send('setoption name UCI_LimitStrength value false');
+      _send('setoption name Skill Level value $skill');
+      _send('setoption name MultiPV value 4');
+    }
+
+    await _waitReady();
   }
 
   @override
-  Future<void> setStrength(int elo) async {
+  Future<void> setPosition(String fen) async {
     if (!_ready || _engine == null) return;
-
-    if (elo >= 1320 && elo <= 3190) {
-      _engine!.stdin = 'setoption name UCI_LimitStrength value true';
-      _engine!.stdin = 'setoption name UCI_Elo value $elo';
-    } else if (elo > 3190) {
-      _engine!.stdin = 'setoption name UCI_LimitStrength value false';
-      _engine!.stdin = 'setoption name Skill Level value 20';
-    } else {
-      _engine!.stdin = 'setoption name UCI_LimitStrength value false';
-      final skill = _mapEloToSkill(elo);
-      _engine!.stdin = 'setoption name Skill Level value $skill';
-    }
-
-    _engine!.stdin = 'isready';
-  }
-
-  int _mapEloToSkill(int elo) {
-    final t = ((elo - 250) / (1319 - 250)).clamp(0.0, 1.0);
-    return (t * 8).round();
+    _send('position fen $fen');
   }
 
   @override
   Future<String?> bestMove(int moveTimeMs) async {
     if (!_ready || _engine == null) return null;
 
-    _bestMoveCompleter?.complete(null);
+    _completeBestMove(_bestMoveCompleter, null);
     _bestMoveCompleter = Completer<String?>();
 
-    _engine!.stdin = 'go movetime $moveTimeMs';
+    final effective = _effectiveMoveTimeMs(moveTimeMs);
+    _send('go movetime $effective');
 
     try {
       return await _bestMoveCompleter!.future.timeout(
-        Duration(milliseconds: moveTimeMs + 1500),
+        Duration(milliseconds: effective + 1500),
         onTimeout: () => null,
       );
     } catch (_) {
@@ -75,28 +128,38 @@ class ChessEngineMobile implements ChessEngine {
   }
 
   void _onLine(String line) {
-    if (!line.startsWith('bestmove')) return;
-    final parts = line.trim().split(RegExp(r'\s+'));
-    final bestMove = parts.length >= 2 ? parts[1] : null;
-    if (bestMove == null || bestMove == '(none)') {
-      _bestMoveCompleter?.complete(null);
+    final l = line.trim();
+    if (l == 'uciok') {
+      _completeVoid(_uciCompleter);
       return;
     }
-    _bestMoveCompleter?.complete(bestMove);
+    if (l == 'readyok') {
+      _completeVoid(_readyCompleter);
+      return;
+    }
+    if (!l.startsWith('bestmove')) return;
+
+    final parts = l.split(RegExp(r'\s+'));
+    final bestMove = parts.length >= 2 ? parts[1] : null;
+    if (bestMove == null || bestMove == '(none)') {
+      _completeBestMove(_bestMoveCompleter, null);
+      return;
+    }
+    _completeBestMove(_bestMoveCompleter, bestMove);
   }
 
   @override
   Future<void> dispose() async {
     await _stdoutSubscription?.cancel();
     _stdoutSubscription = null;
-    _bestMoveCompleter?.complete(null);
+    _completeBestMove(_bestMoveCompleter, null);
     _bestMoveCompleter = null;
-    if (_engine != null) {
-      try {
-        _engine!.dispose();
-      } catch (_) {}
-      _engine = null;
-    }
+    _completeVoid(_readyCompleter);
+    _readyCompleter = null;
+    _completeVoid(_uciCompleter);
+    _uciCompleter = null;
+    _engine?.dispose();
+    _engine = null;
     _ready = false;
   }
 }

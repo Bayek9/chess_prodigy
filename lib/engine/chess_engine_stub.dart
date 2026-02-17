@@ -7,6 +7,7 @@ import 'chess_engine.dart';
 class ChessEngineStub implements ChessEngine {
   final Random _random = Random();
   chess.Chess _board = chess.Chess();
+  int _targetElo = 1200;
 
   @override
   Future<void> init() async {}
@@ -21,7 +22,12 @@ class ChessEngineStub implements ChessEngine {
   }
 
   @override
-  Future<void> setStrength(int elo) async {}
+  Future<void> setTargetElo(int elo) async {
+    _targetElo = elo.clamp(250, 3200);
+  }
+
+  @override
+  int get targetElo => _targetElo;
 
   @override
   Future<String?> bestMove(int moveTimeMs) async {

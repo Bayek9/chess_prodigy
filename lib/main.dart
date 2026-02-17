@@ -3,6 +3,7 @@ import 'dart:math' as math;
 import 'package:chess/chess.dart' as chess;
 import 'package:flutter/material.dart';
 import 'package:simple_chess_board/simple_chess_board.dart';
+import 'package:chess_prodigy/widgets/elo_slider.dart';
 import 'package:chess_prodigy/widgets/suggestion_arrows_overlay.dart';
 
 import 'engine/chess_engine.dart';
@@ -42,7 +43,8 @@ class _ChessHomePageState extends State<ChessHomePage> {
   final List<SuggestionArrow> _suggestionArrows = const [];
   bool _thinking = false;
   bool _engineReady = false;
-  double _targetElo = 1200;
+  int _engineElo = 1200;
+  static const List<int> _eloTicks = <int>[250, 850, 1000, 1400, 1500, 2100, 2200, 2450, 3200];
 
   @override
   void initState() {
@@ -56,7 +58,7 @@ class _ChessHomePageState extends State<ChessHomePage> {
     try {
       await _engine.init();
       await _engine.setPosition(_game.fen);
-      await _engine.setStrength(_targetElo.round());
+      await _engine.setTargetElo(_engineElo);
       if (mounted) {
         setState(() {
           _engineReady = true;
@@ -72,18 +74,6 @@ class _ChessHomePageState extends State<ChessHomePage> {
   }
 
   bool _isBlackTurn() => _game.turn == chess.Color.BLACK;
-
-  Future<void> _applyEngineStrength(int elo) async {
-    if (!_engineReady) return;
-    await _engine.setStrength(elo);
-  }
-
-  int _goMoveTimeForElo(int elo) {
-    if (elo < 1320) return 80;
-    if (elo < 1800) return 200;
-    if (elo < 2400) return 400;
-    return 800;
-  }
 
   String? _pieceTypeToPromotion(PieceType? pieceType) {
     if (pieceType == null) return null;
@@ -137,7 +127,7 @@ class _ChessHomePageState extends State<ChessHomePage> {
     if (_engineReady) {
       try {
         await _engine.setPosition(_game.fen);
-        uciMove = await _engine.bestMove(_goMoveTimeForElo(_targetElo.round()));
+        uciMove = await _engine.bestMove(700);
       } catch (_) {
         uciMove = null;
       }
@@ -199,6 +189,26 @@ class _ChessHomePageState extends State<ChessHomePage> {
       body: SafeArea(
         child: Column(
           children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(12, 8, 12, 4),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text('Niveau moteur: $_engineElo'),
+                  EloSlider(
+                    value: _engineElo,
+                    marks: _eloTicks,
+                    onChanged: (v) => setState(() => _engineElo = v),
+                    onChangeEnd: (v) {
+                      setState(() => _engineElo = v);
+                      if (_engineReady) {
+                        _engine.setTargetElo(v);
+                      }
+                    },
+                  ),
+                ],
+              ),
+            ),
             Expanded(
               child: BoardView(
                 fen: _fen,
@@ -218,25 +228,8 @@ class _ChessHomePageState extends State<ChessHomePage> {
                     promotionPiece: pieceType,
                   );
                   if (!applied || _game.game_over) return;
-                  _queueAiMove();
+                  _requestAiMove();
                 },
-              ),
-            ),
-            Padding(
-              padding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
-              child: Column(
-                children: [
-                  Text('Engine Elo: ${_targetElo.round()}'),
-                  Slider(
-                    min: 250,
-                    max: 3200,
-                    divisions: 295,
-                    value: _targetElo,
-                    label: _targetElo.round().toString(),
-                    onChanged: (v) => setState(() => _targetElo = v),
-                    onChangeEnd: (v) => _applyEngineStrength(v.round()),
-                  ),
-                ],
               ),
             ),
           ],
