@@ -46,6 +46,7 @@ class _ChessHomePageState extends State<ChessHomePage> {
   bool _engineReady = false;
   int _engineElo = 1200;
   static const List<int> _eloTicks = <int>[250, 1000, 1600, 2000, 2400, 3200];
+  Timer? _eloDebounce;
   Timer? _aiDebounceTimer;
   int _aiRequestToken = 0;
 
@@ -189,6 +190,7 @@ class _ChessHomePageState extends State<ChessHomePage> {
 
   @override
   void dispose() {
+    _eloDebounce?.cancel();
     _aiDebounceTimer?.cancel();
     unawaited(_engine.dispose());
     super.dispose();
@@ -213,11 +215,21 @@ class _ChessHomePageState extends State<ChessHomePage> {
                   EloSlider(
                     value: _engineElo,
                     marks: _eloTicks,
-                    onChanged: (v) => setState(() => _engineElo = v),
+                    onChanged: (v) {
+                      setState(() => _engineElo = v);
+
+                      if (_engineReady) {
+                        _eloDebounce?.cancel();
+                        _eloDebounce = Timer(const Duration(milliseconds: 180), () async {
+                          await _engine.setTargetElo(_engineElo);
+                        });
+                      }
+                    },
                     onChangeEnd: (v) async {
                       setState(() => _engineElo = v);
+                      _eloDebounce?.cancel();
                       if (_engineReady) {
-                        await _engine.setTargetElo(v);
+                        await _engine.setTargetElo(v.toInt());
                       }
                     },
                   ),
@@ -229,6 +241,7 @@ class _ChessHomePageState extends State<ChessHomePage> {
                 fen: _fen,
                 lastMoveToHighlight: _lastMoveArrow,
                 suggestionArrows: _suggestionArrows,
+                thinking: _thinking,
                 blackSideAtBottom: false,
                 onMove: _onHumanMove,
                 onPromote: () async => PieceType.queen,
@@ -260,6 +273,7 @@ class BoardView extends StatelessWidget {
     required this.fen,
     required this.lastMoveToHighlight,
     required this.suggestionArrows,
+    required this.thinking,
     required this.onMove,
     required this.blackSideAtBottom,
     required this.onPromote,
@@ -269,6 +283,7 @@ class BoardView extends StatelessWidget {
   final String fen;
   final BoardArrow? lastMoveToHighlight;
   final List<SuggestionArrow> suggestionArrows;
+  final bool thinking;
   final bool blackSideAtBottom;
   final void Function(ShortMove move) onMove;
   final Future<PieceType?> Function() onPromote;
@@ -295,12 +310,12 @@ class BoardView extends StatelessWidget {
                   fen: fen,
                   blackSideAtBottom: blackSideAtBottom,
                   whitePlayerType: PlayerType.human,
-                  blackPlayerType: PlayerType.computer,
+                  blackPlayerType: PlayerType.human,
                   onMove: ({required ShortMove move}) => onMove(move),
                   onPromote: onPromote,
                   onPromotionCommited: onPromotionCommited,
                   showCoordinatesZone: false,
-                  engineThinking: false,
+                  engineThinking: thinking,
                   highlightLastMoveSquares: true,
                   showPossibleMoves: true,
                   normalMoveIndicatorBuilder: (cellSize) => Center(

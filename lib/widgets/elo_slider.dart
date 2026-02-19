@@ -26,6 +26,30 @@ class EloSlider extends StatelessWidget {
     final maxValue = sortedMarks.last;
     final clampedValue = value.clamp(minValue, maxValue);
 
+    // Valeurs autorisées : 250, 300, 400, 500 ... jusqu'à maxValue
+    final allowed = <int>[minValue];
+    final start = minValue + 50; // 300 si minValue=250
+    for (int e = start; e <= maxValue; e += 100) {
+      allowed.add(e);
+    }
+    final maxIndex = allowed.length - 1;
+
+    // Trouver l'index le plus proche pour "snap"
+    int nearestIndex(int elo) {
+      var bestI = 0;
+      var bestD = (allowed[0] - elo).abs();
+      for (var i = 1; i < allowed.length; i++) {
+        final d = (allowed[i] - elo).abs();
+        if (d < bestD) {
+          bestD = d;
+          bestI = i;
+        }
+      }
+      return bestI;
+    }
+
+    final currentIndex = nearestIndex(clampedValue);
+
     // Style demandé
     const double thumbRadius = 16; // plus gros bouton
     const double trackHeight = 10; // barre plus épaisse
@@ -51,7 +75,7 @@ class EloSlider extends StatelessWidget {
 
         final labels = <Widget>[];
         for (final mark in sortedMarks) {
-          final ratio = (mark - minValue) / (maxValue - minValue);
+          final ratio = nearestIndex(mark) / maxIndex;
           final x = trackStart + ratio * trackWidth;
 
           final text = '$mark';
@@ -101,15 +125,14 @@ class EloSlider extends StatelessWidget {
                 thumbColor: const Color(0xFFEFEFEF),
               ),
               child: Slider(
-                min: minValue.toDouble(),
-                max: maxValue.toDouble(),
-                value: clampedValue.toDouble(),
-
-                // Pas de divisions => slider continu, donc pas de ticks auto
-                // (et on garde noTickMark pour forcer l'absence de traits)
-                onChanged: (v) => onChanged(v.round()),
-                onChangeEnd:
-                    onChangeEnd == null ? null : (v) => onChangeEnd!(v.round()),
+                min: 0,
+                max: maxIndex.toDouble(),
+                divisions: maxIndex, // discret : N intervalles -> N+1 valeurs possibles
+                value: currentIndex.toDouble(),
+                onChanged: (v) => onChanged(allowed[v.round()]),
+                onChangeEnd: onChangeEnd == null
+                    ? null
+                    : (v) => onChangeEnd!(allowed[v.round()]),
               ),
             ),
             const SizedBox(height: 6),

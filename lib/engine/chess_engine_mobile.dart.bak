@@ -7,7 +7,7 @@ import 'chess_engine.dart';
 
 class ChessEngineMobile implements ChessEngine {
   final math.Random _rng = math.Random();
-  final Map<int, _PvCandidate> _pvCandidates = <int, _PvCandidate>{};
+  final Map<int, String> _pvCandidates = <int, String>{};
 
   Stockfish? _engine;
   StreamSubscription<String>? _stdoutSub;
@@ -134,22 +134,15 @@ class ChessEngineMobile implements ChessEngine {
       _simulatedStrength = true;
       _searchDepthCap = _simulatedDepthForElo(_targetElo);
 
-      // En mode < 1320, on ne peut pas utiliser UCI_Elo (plage officielle min 1320).
-      // On récupère donc plusieurs candidats (MultiPV) et on choisit ensuite un coup
-      // "humain" en fonction du delta d'évaluation.
       if (_hasLimitStrength) {
         _send('setoption name UCI_LimitStrength value false');
       }
-
-      // Important : on force Skill au max pour obtenir des candidats stables,
-      // puis on "dégrade" nous-mêmes via la sélection.
       if (_hasSkill) {
-        final maxSkill = _skillMax < _skillMin ? _skillMin : _skillMax;
-        _send('setoption name Skill Level value $maxSkill');
+        final skill = _simulatedSkillForElo(_targetElo);
+        _send('setoption name Skill Level value $skill');
       }
-
       if (_hasMultiPv) {
-        final multiPv = _simulatedMultiPvForElo(_targetElo);
+        final multiPv = _targetElo <= 700 ? 6 : 4; // plus de variabilité très bas Elo
         _send('setoption name MultiPV value $multiPv');
       }
     }
@@ -167,12 +160,14 @@ class ChessEngineMobile implements ChessEngine {
 
     final existing = _bestMoveCompleter;
     if (existing != null && !existing.isCompleted) {
-      // stop => l'engine va renvoyer un bestmove pour la recherche précédente.
-      // On synchronise (isready/readyok) pour éviter de mélanger les réponses.
       _send('stop');
+
+      // Laisse l'engine terminer proprement la recherche précédente
+      // (stop -> bestmove), puis resynchronise avant le prochain go.
       try {
         await _syncReady(timeout: const Duration(seconds: 2));
       } catch (_) {}
+
       if (!existing.isCompleted) {
         existing.complete(null);
       }
@@ -271,7 +266,7 @@ class ChessEngineMobile implements ChessEngine {
 
     final parts = l.split(RegExp(r'\s+'));
     final move = parts.length >= 2 ? parts[1] : '(none)';
-    final normalized = (move == '(none)' || move == '0000') ? null : move;
+    final normalized = (move == '(none)') ? null : move;
 
     final chosen = _simulatedStrength
         ? _chooseHumanizedMove(normalized)
@@ -283,207 +278,75 @@ class ChessEngineMobile implements ChessEngine {
     }
   }
 
-void _parseInfoPvLine(String line) {
+  void _parseInfoPvLine(String line) {
     if (!_simulatedStrength) return;
 
     final c = _bestMoveCompleter;
     if (c == null || c.isCompleted) return;
 
-    // 1) multipv
+    // supporte aussi les promotions (e7e8q)
+    final pv = RegExp(r'\bpv\s+([a-h][1-8][a-h][1-8][qrbn]?)')
+        .firstMatch(line)
+        ?.group(1);
+    if (pv == null) return;
+
     final mpvStr = RegExp(r'\bmultipv\s+(\d+)').firstMatch(line)?.group(1);
     final mpv = int.tryParse(mpvStr ?? '') ?? 1;
     if (mpv < 1 || mpv > 16) return;
 
-    // 2) premier coup de la PV (supporte aussi les promotions e7e8q)
-    final pvMove = RegExp(r'\bpv\s+([a-h][1-8][a-h][1-8][qrbn]?)')
-        .firstMatch(line)
-        ?.group(1);
-    if (pvMove == null) return;
-
-    // 3) score cp / mate
-    final cpStr =
-        RegExp(r'\bscore\s+cp\s+(-?\d+)').firstMatch(line)?.group(1);
-    final mateStr =
-        RegExp(r'\bscore\s+mate\s+(-?\d+)').firstMatch(line)?.group(1);
-
-    final cp = int.tryParse(cpStr ?? '');
-    final mate = int.tryParse(mateStr ?? '');
-
-    _pvCandidates[mpv] = _PvCandidate(move: pvMove, cp: cp, mate: mate);
+    _pvCandidates[mpv] = pv;
   }
 
-String? _chooseHumanizedMove(String? engineMove) {
+  String? _chooseHumanizedMove(String? engineMove) {
     if (engineMove == null) return null;
 
-    // Fallback si on n'a pas assez de PV candidates
-    if (_pvCandidates.isEmpty) return engineMove;
-
-    final elo = _targetElo;
-
-    // Liste triée par multipv (1 = meilleur)
     final ranked = _pvCandidates.entries.toList()
       ..sort((a, b) => a.key.compareTo(b.key));
+    if (ranked.isEmpty) return engineMove;
 
-    // Convertit en candidats scorés
-    final scored = <_ScoredCandidate>[];
-    for (final e in ranked) {
-      final cand = e.value;
-      final units = _candidateScoreUnits(cand, elo);
-      scored.add(_ScoredCandidate(cand, units));
-    }
-    if (scored.isEmpty) return engineMove;
+    final maxRank = _targetElo <= 350
+        ? 6
+        : _targetElo <= 550
+            ? 5
+            : _targetElo <= 800
+                ? 4
+                : _targetElo <= 1100
+                    ? 3
+                    : 2;
 
-    // Le meilleur score (plus grand = mieux pour le camp au trait)
-    var bestUnits = scored.first.units;
-    for (final s in scored) {
-      if (s.units > bestUnits) bestUnits = s.units;
-    }
+    final candidates = ranked.where((e) => e.key <= maxRank).toList();
+    if (candidates.isEmpty) return engineMove;
 
-    for (final s in scored) {
-      s.delta = bestUnits - s.units; // 0 = meilleur, + = pire
-    }
-
-    // Trie par delta (0 en premier)
-    scored.sort((a, b) => a.delta.compareTo(b.delta));
-
-    // Probabilité de faire une "erreur" (pire que le meilleur coup)
-    final mistakeP = _mistakeProbForElo(elo);
-    final doMistake = _rng.nextDouble() < mistakeP;
-
-    if (!doMistake) {
-      return scored.first.cand.move;
-    }
-
-    final minLoss = _minCpLossForElo(elo);
-    final maxLoss = _maxCpLossForElo(elo);
-
-    // Pool principal: on force un vrai écart (>= minLoss) mais on limite les horreurs (<= maxLoss)
-    var pool = scored
-        .where((s) => s.delta >= minLoss && s.delta <= maxLoss)
-        .toList(growable: false);
-
-    // Si trop strict: on autorise toute erreur <= maxLoss
-    pool = pool.isNotEmpty
-        ? pool
-        : scored.where((s) => s.delta > 0 && s.delta <= maxLoss).toList();
-
-    // Si toujours vide: on prend n'importe quel coup autre que le meilleur (si dispo)
-    if (pool.isEmpty) {
-      if (scored.length >= 2) return scored[1].cand.move;
-      return scored.first.cand.move;
-    }
-
-    // "Blunder spike" (pour être bien plus faible, surtout < 800)
-    if (_rng.nextDouble() < _blunderSpikeProbForElo(elo)) {
-      pool.sort((a, b) => b.delta.compareTo(a.delta)); // pire en premier
-      return pool.first.cand.move;
-    }
-
-    // Poids biaisés vers les coups pires (delta grand)
-    final alpha = _alphaForElo(elo);
-    final weights = pool
-        .map((s) => math.pow((s.delta + 1).toDouble(), alpha).toDouble())
-        .toList(growable: false);
-
+    final weights = _weightsForElo(_targetElo, candidates.length);
     final idx = _sampleWeightedIndex(weights);
-    return pool[idx].cand.move;
+    return candidates[idx].value;
   }
 
-  // --- Paramètres de "faiblesse" (Elo simulé < 1320) ---
-
-  int _simulatedMultiPvForElo(int elo) {
-    final anchors = <MapEntry<int, double>>[
-      const MapEntry(250, 12.0),
-      const MapEntry(500, 10.0),
-      const MapEntry(800, 8.0),
-      const MapEntry(1100, 6.0),
-      MapEntry(_uciEloMin, 4.0),
-    ];
-    final raw = _interpByElo(anchors, elo).round();
-    return raw.clamp(2, 16);
-  }
-
-  double _mistakeProbForElo(int elo) {
-    // Plus élevé => choisit plus souvent un coup suboptimal.
-    // (Tuning "2x plus nul" : probas assez agressives.)
-    final anchors = <MapEntry<int, double>>[
-      const MapEntry(250, 0.95),
-      const MapEntry(500, 0.90),
-      const MapEntry(800, 0.75),
-      const MapEntry(1100, 0.55),
-      MapEntry(_uciEloMin, 0.35),
-    ];
-    final v = _interpByElo(anchors, elo);
-    return v.clamp(0.0, 1.0);
-  }
-
-  double _blunderSpikeProbForElo(int elo) {
-    // Chance ponctuelle de choisir le pire coup du pool (très bas Elo).
-    final anchors = <MapEntry<int, double>>[
-      const MapEntry(250, 0.35),
-      const MapEntry(500, 0.25),
-      const MapEntry(800, 0.12),
-      const MapEntry(1100, 0.06),
-      MapEntry(_uciEloMin, 0.02),
-    ];
-    final v = _interpByElo(anchors, elo);
-    return v.clamp(0.0, 1.0);
-  }
-
-  // Force un "vrai" mauvais coup (sinon, ça joue trop clean)
-  int _minCpLossForElo(int elo) {
-    final anchors = <MapEntry<int, double>>[
-      const MapEntry(250, 80.0),
-      const MapEntry(500, 60.0),
-      const MapEntry(800, 35.0),
-      const MapEntry(1100, 20.0),
-      MapEntry(_uciEloMin, 10.0),
-    ];
-    return _interpByElo(anchors, elo).round().clamp(0, 1000000);
-  }
-
-  // Budget d'erreur maximum (plus grand => plus de gaffes)
-  int _maxCpLossForElo(int elo) {
-    // Tuning "2x plus nul" : budgets élevés à bas Elo.
-    final anchors = <MapEntry<int, double>>[
-      const MapEntry(250, 800.0),  // ~8 pions
-      const MapEntry(500, 500.0),  // ~5 pions
-      const MapEntry(800, 250.0),  // ~2.5 pions
-      const MapEntry(1100, 120.0), // ~1.2 pions
-      MapEntry(_uciEloMin, 60.0),
-    ];
-    return _interpByElo(anchors, elo).round().clamp(0, 1000000);
-  }
-
-  double _alphaForElo(int elo) {
-    // alpha > 1 => bias fort vers les coups pires
-    final anchors = <MapEntry<int, double>>[
-      const MapEntry(250, 1.8),
-      const MapEntry(500, 1.6),
-      const MapEntry(800, 1.3),
-      const MapEntry(1100, 1.0),
-      MapEntry(_uciEloMin, 0.8),
-    ];
-    return _interpByElo(anchors, elo).clamp(0.5, 3.0);
-  }
-
-  int _candidateScoreUnits(_PvCandidate c, int elo) {
-    // UCI "score cp" est déjà en centipawns.
-    // Pour "mate", on convertit en valeur énorme, mais on compresse à bas Elo
-    // pour permettre de rater des mats (plus humain).
-    if (c.mate != null) {
-      final m = c.mate!;
-      final sign = m >= 0 ? 1 : -1;
-      final absM = m.abs();
-
-      final base = (elo <= 500)
-          ? 4000
-          : (elo <= 800)
-              ? 8000
-              : 100000;
-      return sign * (base - absM);
+  List<double> _weightsForElo(int elo, int n) {
+    List<double> base;
+    if (elo <= 300) {
+      base = const [0.12, 0.20, 0.24, 0.20, 0.14, 0.10];
+    } else if (elo <= 500) {
+      base = const [0.22, 0.28, 0.24, 0.14, 0.08, 0.04];
+    } else if (elo <= 800) {
+      base = const [0.40, 0.30, 0.18, 0.08, 0.03, 0.01];
+    } else if (elo <= 1100) {
+      base = const [0.62, 0.24, 0.10, 0.04];
+    } else {
+      base = const [0.85, 0.15];
     }
-    return c.cp ?? 0;
+
+    final out = List<double>.generate(
+      n,
+      (i) => i < base.length ? base[i] : 0.0,
+      growable: false,
+    );
+
+    final sum = out.fold<double>(0.0, (a, b) => a + b);
+    if (sum <= 0.0) {
+      return List<double>.filled(n, 1.0 / n, growable: false);
+    }
+    return out.map((w) => w / sum).toList(growable: false);
   }
 
   int _sampleWeightedIndex(List<double> weights) {
@@ -554,27 +417,39 @@ String? _chooseHumanizedMove(String? engineMove) {
 
   // ---------- Simulation Elo (sous la borne mini UCI_Elo) ----------
 
+  int _simulatedSkillForElo(int elo) {
+    final anchors = <MapEntry<int, double>>[
+      MapEntry(250, _skillMin.toDouble()),
+      MapEntry(500, _skillMin < 0 ? -16.0 : 0.0),
+      MapEntry(800, _skillMin < 0 ? -9.0 : 1.0),
+      MapEntry(1100, _skillMin < 0 ? -5.0 : 3.0),
+      MapEntry(_uciEloMin, _skillMin < 0 ? -1.0 : 6.0),
+    ];
+
+    final raw = _interpByElo(anchors, elo).round();
+    return raw.clamp(_skillMin, _skillMax);
+  }
 
   int _simulatedDepthForElo(int elo) {
     final anchors = <MapEntry<int, double>>[
       const MapEntry(250, 1.0),
       const MapEntry(500, 1.0),
-      const MapEntry(800, 1.0),
-      const MapEntry(1100, 2.0),
-      MapEntry(_uciEloMin, 3.0),
+      const MapEntry(800, 2.0),
+      const MapEntry(1100, 3.0),
+      MapEntry(_uciEloMin, 4.0),
     ];
 
     final raw = _interpByElo(anchors, elo).round();
-    return raw.clamp(1, 3);
+    return raw.clamp(1, 4);
   }
 
   int _simulatedMoveTimeMs(int baseMs) {
     final anchors = <MapEntry<int, double>>[
-      const MapEntry(250, 10.0),
-      const MapEntry(500, 12.0),
-      const MapEntry(800, 20.0),
-      const MapEntry(1100, 40.0),
-      MapEntry(_uciEloMin, 70.0),
+      const MapEntry(250, 12.0),
+      const MapEntry(500, 20.0),
+      const MapEntry(800, 40.0),
+      const MapEntry(1100, 80.0),
+      MapEntry(_uciEloMin, 140.0),
     ];
 
     final refMs = _interpByElo(anchors, _targetElo);
@@ -601,24 +476,6 @@ String? _chooseHumanizedMove(String? engineMove) {
     }
     return points.last.value;
   }
-}
-
-class _PvCandidate {
-  _PvCandidate({required this.move, this.cp, this.mate});
-
-  final String move;
-  final int? cp;
-  final int? mate;
-}
-
-class _ScoredCandidate {
-  _ScoredCandidate(this.cand, this.units);
-
-  final _PvCandidate cand;
-  final int units;
-
-  // bestUnits - units
-  int delta = 0;
 }
 
 class _TokenWaiter {

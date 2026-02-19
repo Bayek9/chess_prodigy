@@ -33,6 +33,7 @@ dependencies:
   simple_chess_board: ^1.9.0
   chess: ^0.8.1
   stockfish: ^1.8.1
+  stockfish_chess_engine: ^0.8.2
 
 dev_dependencies:
   flutter_test:

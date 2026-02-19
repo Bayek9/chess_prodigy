@@ -155,6 +155,14 @@ packages:
       url: "https://pub.dev"
     source: hosted
     version: "1.9.1"
+  plugin_platform_interface:
+    dependency: transitive
+    description:
+      name: plugin_platform_interface
+      sha256: "4820fbfdb9478b1ebae27888254d445073732dae3d6ea81f0b7e06d5dedc3f02"
+      url: "https://pub.dev"
+    source: hosted
+    version: "2.1.8"
   simple_chess_board:
     dependency: "direct main"
     description:
@@ -191,6 +199,14 @@ packages:
       url: "https://pub.dev"
     source: hosted
     version: "1.8.1"
+  stockfish_chess_engine:
+    dependency: "direct main"
+    description:
+      name: stockfish_chess_engine
+      sha256: "9349400ad696900b731c40d50c8459475f6739c07da0018a948de79f3c1d5b9d"
+      url: "https://pub.dev"
+    source: hosted
+    version: "0.8.2"
   stream_channel:
     dependency: transitive
     description:
