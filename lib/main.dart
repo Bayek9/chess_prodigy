@@ -49,6 +49,7 @@ class _ChessHomePageState extends State<ChessHomePage> {
   Timer? _eloDebounce;
   Timer? _aiDebounceTimer;
   int _aiRequestToken = 0;
+  final math.Random _rng = math.Random();
 
   @override
   void initState() {
@@ -123,15 +124,22 @@ class _ChessHomePageState extends State<ChessHomePage> {
   Future<void> _requestAiMove({required int token}) async {
     if (token != _aiRequestToken || _thinking || !_isBlackTurn() || _game.game_over) return;
 
+    // On bloque les actions humaines, mais on ne rallonge pas le calcul moteur.
     setState(() {
       _thinking = true;
     });
+
+    // DÈlai esthÈtique "humain" : 1 ‡ 2 secondes visibles aprËs ton coup.
+    // IMPORTANT : on ne change PAS bestMove(700) => pas d'impact sur le niveau.
+    // _queueAiMove attend dÈj‡ 280ms, donc on vise 700..1700ms ici => ~980..1980ms visibles.
+    final sw = Stopwatch()..start();
+    final targetMs = 700 + _rng.nextInt(1001); // 700..1700
 
     String? uciMove;
     if (_engineReady) {
       try {
         await _engine.setPosition(_game.fen);
-        uciMove = await _engine.bestMove(700);
+        uciMove = await _engine.bestMove(700); // on garde 700ms = mÍme force
       } catch (_) {
         uciMove = null;
       }
@@ -139,18 +147,24 @@ class _ChessHomePageState extends State<ChessHomePage> {
 
     if (!mounted) return;
 
-    // Si une requ√™te plus r√©cente existe, on ignore ce r√©sultat.
     if (token != _aiRequestToken) {
-      setState(() {
-        _thinking = false;
-      });
+      setState(() => _thinking = false);
       return;
     }
 
-    if (uciMove != null &&
-        uciMove.length >= 4 &&
-        _isBlackTurn() &&
-        !_game.game_over) {
+    // Attente esthÈtique (sans effet sur la force)
+    final remainingMs = targetMs - sw.elapsedMilliseconds;
+    if (remainingMs > 0) {
+      await Future.delayed(Duration(milliseconds: remainingMs));
+    }
+
+    if (!mounted) return;
+    if (token != _aiRequestToken) {
+      setState(() => _thinking = false);
+      return;
+    }
+
+    if (uciMove != null && uciMove.length >= 4 && _isBlackTurn() && !_game.game_over) {
       final from = uciMove.substring(0, 2);
       final to = uciMove.substring(2, 4);
       final promotion = uciMove.length > 4 ? uciMove[4] : null;
@@ -158,9 +172,7 @@ class _ChessHomePageState extends State<ChessHomePage> {
     }
 
     if (mounted) {
-      setState(() {
-        _thinking = false;
-      });
+      setState(() => _thinking = false);
     }
   }
 
@@ -188,6 +200,40 @@ class _ChessHomePageState extends State<ChessHomePage> {
     _queueAiMove();
   }
 
+  Future<void> _newGame() async {
+    // Annule les timers (IA / elo debounce)
+    _aiDebounceTimer?.cancel();
+    _eloDebounce?.cancel();
+
+    // Invalide toute requ√™te IA en cours (si un bestMove revient, il sera ignor√©)
+    _aiRequestToken++;
+
+    // Reset logique du jeu (revient √† la position initiale)
+    _game.reset();
+    final startFen = _game.fen;
+
+    if (!mounted) return;
+
+    // Reset UI
+    setState(() {
+      _fen = startFen;
+      _lastMoveArrow = null;
+      _thinking = false;
+    });
+
+    // Reset moteur (position de d√©part)
+    if (_engineReady) {
+      try {
+        await _engine.newGame();
+        await _engine.setPosition(startFen);
+        // optionnel: r√©-applique l'Elo actuel (pas obligatoire si tu l'as deja)
+        await _engine.setTargetElo(_engineElo);
+      } catch (_) {
+        // ignore
+      }
+    }
+  }
+
   @override
   void dispose() {
     _eloDebounce?.cancel();
@@ -201,6 +247,13 @@ class _ChessHomePageState extends State<ChessHomePage> {
     return Scaffold(
       appBar: AppBar(
         title: const Text('Chess Prodigy'),
+        actions: [
+          IconButton(
+            tooltip: 'Nouvelle partie',
+            icon: const Icon(Icons.refresh),
+            onPressed: _newGame,
+          ),
+        ],
       ),
       backgroundColor: const Color(0xFF1E1E1E),
       body: SafeArea(
@@ -315,7 +368,7 @@ class BoardView extends StatelessWidget {
                   onPromote: onPromote,
                   onPromotionCommited: onPromotionCommited,
                   showCoordinatesZone: false,
-                  engineThinking: thinking,
+                  engineThinking: false,
                   highlightLastMoveSquares: true,
                   showPossibleMoves: true,
                   normalMoveIndicatorBuilder: (cellSize) => Center(
@@ -447,3 +500,4 @@ class _InsideCoords extends StatelessWidget {
     );
   }
 }
+

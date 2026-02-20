@@ -75,6 +75,15 @@ class ChessEngineDesktop implements ChessEngine {
   }
 
   @override
+  Future<void> newGame() async {
+    if (_engine == null) return;
+    _send('ucinewgame');
+    _readyCompleter = Completer<void>();
+    _send('isready');
+    await _waitReady();
+  }
+
+  @override
   Future<void> setTargetElo(int elo) async {
     _targetElo = math.max(250, math.min(3200, elo));
     if (_engine == null) return;

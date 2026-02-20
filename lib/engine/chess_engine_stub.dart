@@ -22,6 +22,11 @@ class ChessEngineStub implements ChessEngine {
   }
 
   @override
+  Future<void> newGame() async {
+    _board = chess.Chess();
+  }
+
+  @override
   Future<void> setTargetElo(int elo) async {
     _targetElo = elo.clamp(250, 3200);
   }

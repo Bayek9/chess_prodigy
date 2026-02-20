@@ -112,6 +112,13 @@ class ChessEngineMobile implements ChessEngine {
   }
 
   @override
+  Future<void> newGame() async {
+    if (!_ready || _engine == null) return;
+    _send('ucinewgame');
+    await _syncReady(timeout: const Duration(seconds: 2));
+  }
+
+  @override
   Future<void> setTargetElo(int elo) async {
     _targetElo = elo.clamp(250, 3200);
     if (!_ready || _engine == null) return;
@@ -347,7 +354,11 @@ String? _chooseHumanizedMove(String? engineMove) {
     scored.sort((a, b) => a.delta.compareTo(b.delta));
 
     // Probabilité de faire une "erreur" (pire que le meilleur coup)
-    final mistakeP = _mistakeProbForElo(elo);
+    var mistakeP = _mistakeProbForElo(elo);
+    if (elo < 1300) {
+      // Équivalent au "pull" 10% vers le meilleur coup: on réduit la proba d'erreur.
+      mistakeP *= 0.90;
+    }
     final doMistake = _rng.nextDouble() < mistakeP;
 
     if (!doMistake) {
@@ -579,7 +590,8 @@ String? _chooseHumanizedMove(String? engineMove) {
 
     final refMs = _interpByElo(anchors, _targetElo);
     final scale = baseMs / 700.0;
-    final ms = (refMs * scale).round();
+    final strengthBoost = (_targetElo < 1300) ? 1.10 : 1.0;
+    final ms = (refMs * strengthBoost * scale).round();
     return ms.clamp(10, 2500);
   }
 
