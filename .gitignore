@@ -50,3 +50,4 @@ packages/opencv_4/display/
 packages/opencv_4/example/
 /datasets/
 /.venv/
+data/
