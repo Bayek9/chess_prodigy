@@ -18,6 +18,11 @@ python -m venv .venv
 pip install -r tools/dataset/requirements.txt
 ```
 
+If `cairosvg` fails on Windows with `no library called "cairo-2" was found`,
+use Inkscape CLI renderer (section 2).
+If both Cairo and Inkscape are unavailable, use `--svg-renderer pillow_symbols`
+as a pure-Python fallback.
+
 ## 2) Generate synthetic piece dataset (FEN/PGN -> SVG -> PNG -> 64 crops + labels)
 
 From PGN (recommended, realistic positions):
@@ -30,6 +35,32 @@ python tools/dataset/generate_synthetic_piece_dataset.py `
   --variants-per-position 4 `
   --board-size 512 `
   --keep-clean-variant
+```
+
+Windows fallback (no Cairo runtime):
+
+```powershell
+python tools/dataset/generate_synthetic_piece_dataset.py `
+  --pgn-file data\games.pgn `
+  --output-dir datasets\piece_classifier `
+  --max-positions 3000 `
+  --variants-per-position 4 `
+  --board-size 512 `
+  --keep-clean-variant `
+  --svg-renderer inkscape `
+  --inkscape-path "C:\Program Files\Inkscape\bin\inkscape.exe"
+```
+
+Pure-Python fallback (no Cairo, no Inkscape):
+
+```powershell
+python tools/dataset/generate_synthetic_piece_dataset.py `
+  --fen-file data\fens.txt `
+  --output-dir datasets\piece_classifier `
+  --max-positions 200 `
+  --variants-per-position 2 `
+  --board-size 512 `
+  --svg-renderer pillow_symbols
 ```
 
 From FEN list:
@@ -52,6 +83,7 @@ Notes:
 
 - `coordinates=False` is enforced for clean square crops.
 - Augmentations include perspective jitter, small rotation, blur, JPEG artifacts, and noise.
+- Renderer backend is `auto` by default: CairoSVG, then Inkscape, then Pillow symbols.
 
 ## 3) Extract real data from scan dataset JSON
 

@@ -167,7 +167,8 @@ def main() -> None:
     if not dataset_path.exists():
         raise SystemExit(f"Dataset not found: {dataset_path}")
 
-    with dataset_path.open("r", encoding="utf-8") as f:
+    # Accept UTF-8 JSON files with or without BOM (common on Windows editors).
+    with dataset_path.open("r", encoding="utf-8-sig") as f:
         payload = json.load(f)
 
     cases = payload.get("cases")

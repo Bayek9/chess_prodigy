@@ -16,6 +16,9 @@ import argparse
 import csv
 import io
 import random
+import shutil
+import subprocess
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable
@@ -27,17 +30,21 @@ try:
 except ModuleNotFoundError:  # pragma: no cover - runtime dependency
     chess = None
 
+CAIROSVG_IMPORT_ERROR: Exception | None = None
 try:
     import cairosvg
-except ModuleNotFoundError:  # pragma: no cover - runtime dependency
+except Exception as exc:  # pragma: no cover - runtime dependency
     cairosvg = None
+    CAIROSVG_IMPORT_ERROR = exc
 
 try:
-    from PIL import Image, ImageEnhance, ImageFilter
+    from PIL import Image, ImageDraw, ImageEnhance, ImageFilter, ImageFont
 except ModuleNotFoundError:  # pragma: no cover - runtime dependency
     Image = None
+    ImageDraw = None
     ImageEnhance = None
     ImageFilter = None
+    ImageFont = None
 
 
 THEMES = [
@@ -64,6 +71,21 @@ PIECE_LABELS = [
     "bQ",
     "bK",
 ]
+
+UNICODE_PIECES = {
+    "P": "\u2659",
+    "N": "\u2658",
+    "B": "\u2657",
+    "R": "\u2656",
+    "Q": "\u2655",
+    "K": "\u2654",
+    "p": "\u265F",
+    "n": "\u265E",
+    "b": "\u265D",
+    "r": "\u265C",
+    "q": "\u265B",
+    "k": "\u265A",
+}
 
 
 @dataclass(frozen=True)
@@ -124,6 +146,24 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--seed", type=int, default=42, help="Random seed.")
     parser.add_argument(
+        "--svg-renderer",
+        type=str,
+        default="auto",
+        choices=("auto", "cairosvg", "inkscape", "pillow_symbols"),
+        help=(
+            "Renderer backend. 'auto' tries CairoSVG, then Inkscape CLI, then Pillow symbols."
+        ),
+    )
+    parser.add_argument(
+        "--inkscape-path",
+        type=str,
+        default=None,
+        help=(
+            "Optional explicit path to inkscape executable "
+            "(used when --svg-renderer=inkscape or auto fallback)."
+        ),
+    )
+    parser.add_argument(
         "--keep-clean-variant",
         action="store_true",
         help="If set, variant #0 stays un-augmented (clean board).",
@@ -131,12 +171,30 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def ensure_runtime_deps() -> None:
+def resolve_inkscape_binary(path_override: str | None) -> str | None:
+    if path_override:
+        override = Path(path_override)
+        if override.exists():
+            return str(override)
+        found = shutil.which(path_override)
+        if found:
+            return found
+
+    from_path = shutil.which("inkscape")
+    if from_path:
+        return from_path
+
+    if Path(r"C:\Program Files\Inkscape\bin\inkscape.exe").exists():
+        return r"C:\Program Files\Inkscape\bin\inkscape.exe"
+    if Path(r"C:\Program Files\Inkscape\inkscape.exe").exists():
+        return r"C:\Program Files\Inkscape\inkscape.exe"
+    return None
+
+
+def ensure_runtime_deps(args: argparse.Namespace) -> str | None:
     missing = []
     if chess is None:
         missing.append("python-chess")
-    if cairosvg is None:
-        missing.append("cairosvg")
     if Image is None:
         missing.append("Pillow")
     if missing:
@@ -145,6 +203,32 @@ def ensure_runtime_deps() -> None:
             f"Missing dependencies: {joined}\n"
             "Install with: pip install -r tools/dataset/requirements.txt"
         )
+
+    inkscape_bin = resolve_inkscape_binary(args.inkscape_path)
+    if args.svg_renderer == "cairosvg" and cairosvg is None:
+        detail = f" ({CAIROSVG_IMPORT_ERROR})" if CAIROSVG_IMPORT_ERROR else ""
+        raise SystemExit(
+            "CairoSVG backend unavailable" + detail + "\n"
+            "Use --svg-renderer inkscape (and install Inkscape), "
+            "or fix Cairo runtime."
+        )
+
+    if args.svg_renderer == "inkscape" and not inkscape_bin:
+        raise SystemExit(
+            "Inkscape backend selected but executable not found.\n"
+            "Install Inkscape and add it to PATH, or pass --inkscape-path."
+        )
+
+    if args.svg_renderer == "pillow_symbols" and ImageDraw is None:
+        raise SystemExit(
+            "Pillow symbols backend requires Pillow ImageDraw support."
+        )
+
+    if args.svg_renderer == "auto" and cairosvg is None and not inkscape_bin:
+        # auto mode can still run with pillow_symbols fallback.
+        pass
+
+    return inkscape_bin
 
 
 def load_fens_from_file(path: Path) -> list[str]:
@@ -218,9 +302,159 @@ def svg_board(board: chess.Board, size: int, theme: dict[str, str]) -> str:
     )
 
 
-def render_svg_to_image(svg: str) -> Image.Image:
+def _render_svg_with_cairosvg(svg: str) -> Image.Image:
     png_bytes = cairosvg.svg2png(bytestring=svg.encode("utf-8"))
     return Image.open(io.BytesIO(png_bytes)).convert("RGB")
+
+
+def _render_svg_with_inkscape(svg: str, inkscape_bin: str) -> Image.Image:
+    with tempfile.TemporaryDirectory(prefix="chess_svg_") as tmp:
+        tmp_dir = Path(tmp)
+        svg_path = tmp_dir / "board.svg"
+        png_path = tmp_dir / "board.png"
+        svg_path.write_text(svg, encoding="utf-8")
+
+        cmd = [
+            inkscape_bin,
+            str(svg_path),
+            "--export-type=png",
+            f"--export-filename={png_path}",
+        ]
+        proc = subprocess.run(cmd, capture_output=True, text=True, check=False)
+        if proc.returncode != 0 or not png_path.exists():
+            stderr = (proc.stderr or "").strip()
+            stdout = (proc.stdout or "").strip()
+            detail = stderr if stderr else stdout
+            raise RuntimeError(f"Inkscape render failed: {detail or 'unknown error'}")
+
+        # Copy in-memory to keep image valid after temp directory cleanup.
+        return Image.open(png_path).convert("RGB").copy()
+
+
+def _piece_font(size: int) -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
+    font_candidates = [
+        r"C:\Windows\Fonts\seguisym.ttf",
+        r"C:\Windows\Fonts\segoeui.ttf",
+        r"C:\Windows\Fonts\arial.ttf",
+        r"C:\Windows\Fonts\NotoSansSymbols-Regular.ttf",
+    ]
+    for path in font_candidates:
+        if Path(path).exists():
+            try:
+                return ImageFont.truetype(path, size=size)
+            except Exception:
+                continue
+    return ImageFont.load_default()
+
+
+def _draw_piece_centered(
+    draw: ImageDraw.ImageDraw,
+    bbox: tuple[int, int, int, int],
+    glyph: str,
+    is_white_piece: bool,
+    font: ImageFont.FreeTypeFont | ImageFont.ImageFont,
+) -> None:
+    left, top, right, bottom = bbox
+    width = right - left
+    height = bottom - top
+    text_box = draw.textbbox((0, 0), glyph, font=font, stroke_width=1)
+    tw = text_box[2] - text_box[0]
+    th = text_box[3] - text_box[1]
+    x = left + (width - tw) / 2 - text_box[0]
+    y = top + (height - th) / 2 - text_box[1]
+    if is_white_piece:
+        fill = (247, 247, 247)
+        stroke = (18, 18, 18)
+    else:
+        fill = (18, 18, 18)
+        stroke = (240, 240, 240)
+    draw.text((x, y), glyph, font=font, fill=fill, stroke_fill=stroke, stroke_width=1)
+
+
+def _render_board_with_pillow_symbols(board: chess.Board, size: int, theme: dict[str, str]) -> Image.Image:
+    image = Image.new("RGB", (size, size), color=theme["light"])
+    draw = ImageDraw.Draw(image)
+    square_size = size / 8.0
+    font = _piece_font(max(14, int(square_size * 0.74)))
+
+    for row in range(8):
+        for col in range(8):
+            left = int(round(col * square_size))
+            top = int(round(row * square_size))
+            right = int(round((col + 1) * square_size))
+            bottom = int(round((row + 1) * square_size))
+            is_light = (row + col) % 2 == 0
+            fill = theme["light"] if is_light else theme["dark"]
+            draw.rectangle((left, top, right, bottom), fill=fill)
+
+            square = chess.square(col, 7 - row)
+            piece = board.piece_at(square)
+            if piece is None:
+                continue
+            glyph = UNICODE_PIECES.get(piece.symbol())
+            if not glyph:
+                continue
+            _draw_piece_centered(
+                draw=draw,
+                bbox=(left, top, right, bottom),
+                glyph=glyph,
+                is_white_piece=piece.color == chess.WHITE,
+                font=font,
+            )
+
+    return image
+
+
+def render_svg_to_image(svg: str, renderer: str, inkscape_bin: str | None) -> tuple[Image.Image, str]:
+    errors: list[str] = []
+
+    if renderer in ("auto", "cairosvg"):
+        if cairosvg is None:
+            detail = f" ({CAIROSVG_IMPORT_ERROR})" if CAIROSVG_IMPORT_ERROR else ""
+            errors.append("cairosvg unavailable" + detail)
+        else:
+            try:
+                return _render_svg_with_cairosvg(svg), "cairosvg"
+            except Exception as exc:
+                errors.append(f"cairosvg failed: {exc}")
+                if renderer == "cairosvg":
+                    raise RuntimeError("; ".join(errors)) from exc
+
+    if renderer in ("auto", "inkscape"):
+        if not inkscape_bin:
+            errors.append("inkscape executable not found")
+        else:
+            try:
+                return _render_svg_with_inkscape(svg, inkscape_bin), "inkscape"
+            except Exception as exc:
+                errors.append(f"inkscape failed: {exc}")
+                if renderer == "inkscape":
+                    raise RuntimeError("; ".join(errors)) from exc
+
+    if renderer in ("auto", "pillow_symbols"):
+        errors.append("pillow_symbols requires board context, not raw svg")
+
+    raise RuntimeError("; ".join(errors) if errors else "No SVG renderer backend available.")
+
+
+def render_board_image(
+    board: chess.Board,
+    size: int,
+    theme: dict[str, str],
+    renderer: str,
+    inkscape_bin: str | None,
+) -> tuple[Image.Image, str]:
+    if renderer == "pillow_symbols":
+        return _render_board_with_pillow_symbols(board, size=size, theme=theme), "pillow_symbols"
+
+    svg = svg_board(board, size, theme)
+    try:
+        return render_svg_to_image(svg, renderer=renderer, inkscape_bin=inkscape_bin)
+    except Exception:
+        if renderer == "auto":
+            # Last fallback when Cairo and Inkscape are unavailable/broken.
+            return _render_board_with_pillow_symbols(board, size=size, theme=theme), "pillow_symbols"
+        raise
 
 
 def _resample_bicubic() -> int:
@@ -321,7 +555,7 @@ def crop_square(image: Image.Image, row: int, col: int) -> Image.Image:
 
 def main() -> None:
     args = parse_args()
-    ensure_runtime_deps()
+    inkscape_bin = ensure_runtime_deps(args)
 
     if args.train_ratio <= 0 or args.val_ratio < 0 or args.train_ratio + args.val_ratio >= 1:
         raise SystemExit("Invalid split ratios. Require: train_ratio > 0, val_ratio >= 0, train+val < 1.")
@@ -385,13 +619,20 @@ def main() -> None:
 
             for variant_index in range(args.variants_per_position):
                 theme = rng.choice(THEMES)
-                rendered = render_svg_to_image(svg_board(board, args.board_size, theme))
+                rendered, renderer_used = render_board_image(
+                    board=board,
+                    size=args.board_size,
+                    theme=theme,
+                    renderer=args.svg_renderer,
+                    inkscape_bin=inkscape_bin,
+                )
 
                 if args.keep_clean_variant and variant_index == 0:
                     board_img = rendered
-                    augment_tag = "clean"
+                    augment_tag = f"clean[{renderer_used}]"
                 else:
                     board_img, augment_tag = augment_board(rendered, rng)
+                    augment_tag = f"{augment_tag}[{renderer_used}]"
 
                 board_file = f"{board_index:06d}_{variant_index:02d}.png"
                 board_path = boards_dir / board_file
