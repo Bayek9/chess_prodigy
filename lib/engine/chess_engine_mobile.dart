@@ -353,12 +353,19 @@ String? _chooseHumanizedMove(String? engineMove) {
     // Trie par delta (0 en premier)
     scored.sort((a, b) => a.delta.compareTo(b.delta));
 
-    // Probabilité de faire une "erreur" (pire que le meilleur coup)
     var mistakeP = _mistakeProbForElo(elo);
     if (elo < 1300) {
-      // Équivalent au "pull" 10% vers le meilleur coup: on réduit la proba d'erreur.
       mistakeP *= 0.90;
     }
+
+    // >>> AJOUT : si le meilleur coup est un coup de roi, on évite de le "rater"
+    final bestMoveUci = scored.first.cand.move;
+    if (_isKingMove(bestMoveUci, _lastFen)) {
+      // si le 2e meilleur est nettement pire, on force presque toujours le bon coup
+      final secondDelta = scored.length >= 2 ? scored[1].delta : 0;
+      mistakeP *= (secondDelta >= 80) ? 0.15 : 0.35;
+    }
+
     final doMistake = _rng.nextDouble() < mistakeP;
 
     if (!doMistake) {
@@ -380,14 +387,15 @@ String? _chooseHumanizedMove(String? engineMove) {
 
     // Si toujours vide: on prend n'importe quel coup autre que le meilleur (si dispo)
     if (pool.isEmpty) {
-      if (scored.length >= 2) return scored[1].cand.move;
-      return scored.first.cand.move;
+      final pick = scored.length >= 2 ? scored[1] : scored.first;
+      return _preferBetterAlternativeToKingCapture(pick.cand.move, pick.delta, scored);
     }
 
     // "Blunder spike" (pour être bien plus faible, surtout < 800)
     if (_rng.nextDouble() < _blunderSpikeProbForElo(elo)) {
       pool.sort((a, b) => b.delta.compareTo(a.delta)); // pire en premier
-      return pool.first.cand.move;
+      final pick = pool.first;
+      return _preferBetterAlternativeToKingCapture(pick.cand.move, pick.delta, scored);
     }
 
     // Poids biaisés vers les coups pires (delta grand)
@@ -397,7 +405,8 @@ String? _chooseHumanizedMove(String? engineMove) {
         .toList(growable: false);
 
     final idx = _sampleWeightedIndex(weights);
-    return pool[idx].cand.move;
+    final pick = pool[idx];
+    return _preferBetterAlternativeToKingCapture(pick.cand.move, pick.delta, scored);
   }
 
   // --- Paramètres de "faiblesse" (Elo simulé < 1320) ---
@@ -424,7 +433,8 @@ String? _chooseHumanizedMove(String? engineMove) {
       const MapEntry(1100, 0.55),
       MapEntry(_uciEloMin, 0.35),
     ];
-    final v = _interpByElo(anchors, elo);
+    var v = _interpByElo(anchors, elo);
+    if (elo < _uciEloMin) v *= 0.84; // +20% d'erreurs vs 0.70
     return v.clamp(0.0, 1.0);
   }
 
@@ -437,7 +447,8 @@ String? _chooseHumanizedMove(String? engineMove) {
       const MapEntry(1100, 0.06),
       MapEntry(_uciEloMin, 0.02),
     ];
-    final v = _interpByElo(anchors, elo);
+    var v = _interpByElo(anchors, elo);
+    if (elo < _uciEloMin) v *= 0.84; // +20% d'erreurs vs 0.70
     return v.clamp(0.0, 1.0);
   }
 
@@ -450,7 +461,9 @@ String? _chooseHumanizedMove(String? engineMove) {
       const MapEntry(1100, 20.0),
       MapEntry(_uciEloMin, 10.0),
     ];
-    return _interpByElo(anchors, elo).round().clamp(0, 1000000);
+    var v = _interpByElo(anchors, elo);
+    if (elo < _uciEloMin) v *= 0.84; // +20% d'erreurs vs 0.70
+    return v.round().clamp(0, 1000000);
   }
 
   // Budget d'erreur maximum (plus grand => plus de gaffes)
@@ -463,7 +476,9 @@ String? _chooseHumanizedMove(String? engineMove) {
       const MapEntry(1100, 120.0), // ~1.2 pions
       MapEntry(_uciEloMin, 60.0),
     ];
-    return _interpByElo(anchors, elo).round().clamp(0, 1000000);
+    var v = _interpByElo(anchors, elo);
+    if (elo < _uciEloMin) v *= 0.84; // +20% d'erreurs vs 0.70
+    return v.round().clamp(0, 1000000);
   }
 
   double _alphaForElo(int elo) {
@@ -505,6 +520,102 @@ String? _chooseHumanizedMove(String? engineMove) {
       if (r <= acc) return i;
     }
     return math.max(0, weights.length - 1);
+  }
+
+  String? _fenPieceAt(String fen, String square) {
+    if (square.length < 2) return null;
+
+    // Support "startpos" (au cas où)
+    if (fen == 'startpos') {
+      const row8 = 'rnbqkbnr';
+      const row1 = 'RNBQKBNR';
+      final file = square.codeUnitAt(0) - 'a'.codeUnitAt(0);
+      final rank = int.tryParse(square[1]) ?? -1;
+      if (file < 0 || file > 7 || rank < 1 || rank > 8) return null;
+      if (rank == 1) return row1[file];
+      if (rank == 2) return 'P';
+      if (rank == 7) return 'p';
+      if (rank == 8) return row8[file];
+      return null;
+    }
+
+    final parts = fen.split(' ');
+    if (parts.isEmpty) return null;
+    final board = parts[0];
+    final ranks = board.split('/');
+    if (ranks.length != 8) return null;
+
+    final file = square.codeUnitAt(0) - 'a'.codeUnitAt(0);
+    final rank = int.tryParse(square[1]) ?? -1;
+    if (file < 0 || file > 7 || rank < 1 || rank > 8) return null;
+
+    final r = 8 - rank; // FEN: rang 8 -> index 0
+    final row = ranks[r];
+
+    var f = 0;
+    for (var i = 0; i < row.length; i++) {
+      final ch = row[i];
+      final digit = int.tryParse(ch);
+      if (digit != null) {
+        f += digit;
+      } else {
+        if (f == file) return ch;
+        f++;
+      }
+    }
+    return null;
+  }
+
+  bool _isKingMove(String uci, String fen) {
+    if (uci.length < 4) return false;
+    final from = uci.substring(0, 2);
+    final mover = _fenPieceAt(fen, from);
+    return mover == 'K' || mover == 'k';
+  }
+
+  bool _isCaptureMove(String uci, String fen) {
+    if (uci.length < 4) return false;
+    final from = uci.substring(0, 2);
+    final to = uci.substring(2, 4);
+
+    final mover = _fenPieceAt(fen, from);
+    final target = _fenPieceAt(fen, to);
+    if (mover == null || target == null) return false;
+
+    final moverIsWhite = mover.toUpperCase() == mover;
+    final targetIsWhite = target.toUpperCase() == target;
+    return moverIsWhite != targetIsWhite;
+  }
+
+  bool _isKingCaptureMove(String uci, String fen) {
+    return _isKingMove(uci, fen) && _isCaptureMove(uci, fen);
+  }
+
+  // Si on a sélectionné Kx... MAIS qu’il existe un coup "mieux" qui est
+  // - une prise par une autre pièce, OU
+  // - un déplacement du roi (K...) non-capture
+  // alors on préfère ce coup-là.
+  String _preferBetterAlternativeToKingCapture(
+    String chosenMove,
+    int chosenDelta,
+    List<_ScoredCandidate> scored,
+  ) {
+    if (!_isKingCaptureMove(chosenMove, _lastFen)) return chosenMove;
+
+    for (final s in scored) {
+      if (s.delta >= chosenDelta) break; // pas mieux
+      final m = s.cand.move;
+
+      final isBetterNonKingCapture =
+          _isCaptureMove(m, _lastFen) && !_isKingMove(m, _lastFen);
+      final isBetterKingQuiet =
+          _isKingMove(m, _lastFen) && !_isCaptureMove(m, _lastFen);
+
+      if (isBetterNonKingCapture || isBetterKingQuiet) {
+        return m; // c'est le meilleur "mieux" car scored est trié par delta
+      }
+    }
+    return chosenMove;
   }
 
   void _parseOptionLine(String line) {
@@ -590,7 +701,7 @@ String? _chooseHumanizedMove(String? engineMove) {
 
     final refMs = _interpByElo(anchors, _targetElo);
     final scale = baseMs / 700.0;
-    final strengthBoost = (_targetElo < 1300) ? 1.10 : 1.0;
+    final strengthBoost = (_targetElo < _uciEloMin) ? 1.04 : 1.0; // -20% vs 1.30
     final ms = (refMs * strengthBoost * scale).round();
     return ms.clamp(10, 2500);
   }

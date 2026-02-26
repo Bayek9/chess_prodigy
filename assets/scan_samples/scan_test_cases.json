@@ -1,0 +1,719 @@
+﻿{
+    "version":  1,
+    "board_size":  8,
+    "point_order":  "tl,tr,br,bl",
+    "warp_target_size":  512,
+    "cases":  [
+                  {
+                      "id":  "facile_01",
+                      "image":  "assets/scan_samples/images/facile.webp",
+                      "type":  "screenshot",
+                      "difficulty":  "easy",
+                      "expected":  {
+                                       "board_detected":  true,
+                                       "corners":  [
+                                                       {
+                                                           "x":  6.0,
+                                                           "y":  5.0
+                                                       },
+                                                       {
+                                                           "x":  837.0,
+                                                           "y":  5.0
+                                                       },
+                                                       {
+                                                           "x":  836.0,
+                                                           "y":  834.0
+                                                       },
+                                                       {
+                                                           "x":  7.0,
+                                                           "y":  831.0
+                                                       }
+                                                   ],
+                                       "warp_ok":  true,
+                                       "orientation_ok":  true,
+                                       "white_at_bottom":  null,
+                                       "fen":  null
+                                   },
+                      "notes":  "A annoter après revue visuelle dans le mode debug."
+                  },
+                  {
+                      "id":  "facile_02",
+                      "image":  "assets/scan_samples/images/facile 2.webp",
+                      "type":  "screenshot",
+                      "difficulty":  "easy",
+                      "expected":  {
+                                       "board_detected":  true,
+                                       "corners":  [
+                                                       {
+                                                           "x":  3.0,
+                                                           "y":  230.0
+                                                       },
+                                                       {
+                                                           "x":  377.0,
+                                                           "y":  235.0
+                                                       },
+                                                       {
+                                                           "x":  376.0,
+                                                           "y":  605.0
+                                                       },
+                                                       {
+                                                           "x":  4.0,
+                                                           "y":  602.0
+                                                       }
+                                                   ],
+                                       "warp_ok":  true,
+                                       "orientation_ok":  true,
+                                       "white_at_bottom":  null,
+                                       "fen":  null
+                                   },
+                      "notes":  "A annoter après revue visuelle dans le mode debug."
+                  },
+                  {
+                      "id":  "facile_03",
+                      "image":  "assets/scan_samples/images/facile 3.webp",
+                      "type":  "screenshot",
+                      "difficulty":  "easy",
+                      "expected":  {
+                                       "board_detected":  true,
+                                       "corners":  [
+                                                       {
+                                                           "x":  3.0,
+                                                           "y":  233.0
+                                                       },
+                                                       {
+                                                           "x":  376.0,
+                                                           "y":  233.0
+                                                       },
+                                                       {
+                                                           "x":  378.0,
+                                                           "y":  599.0
+                                                       },
+                                                       {
+                                                           "x":  2.0,
+                                                           "y":  601.0
+                                                       }
+                                                   ],
+                                       "warp_ok":  true,
+                                       "orientation_ok":  true,
+                                       "white_at_bottom":  null,
+                                       "fen":  null
+                                   },
+                      "notes":  "A annoter après revue visuelle dans le mode debug."
+                  },
+                  {
+                      "id":  "medium_01",
+                      "image":  "assets/scan_samples/images/medium.webp",
+                      "type":  "screenshot",
+                      "difficulty":  "medium",
+                      "expected":  {
+                                       "board_detected":  true,
+                                       "corners":  [
+                                                       {
+                                                           "x":  261.0,
+                                                           "y":  54.0
+                                                       },
+                                                       {
+                                                           "x":  865.0,
+                                                           "y":  52.0
+                                                       },
+                                                       {
+                                                           "x":  865.0,
+                                                           "y":  660.0
+                                                       },
+                                                       {
+                                                           "x":  260.0,
+                                                           "y":  658.0
+                                                       }
+                                                   ],
+                                       "warp_ok":  true,
+                                       "orientation_ok":  true,
+                                       "white_at_bottom":  null,
+                                       "fen":  null
+                                   },
+                      "notes":  "A annoter après revue visuelle dans le mode debug."
+                  },
+                  {
+                      "id":  "difficile_01",
+                      "image":  "assets/scan_samples/images/difficile.webp",
+                      "type":  "photo",
+                      "difficulty":  "hard",
+                      "expected":  {
+                                       "board_detected":  true,
+                                       "corners":  [
+                                                       {
+                                                           "x":  155.0,
+                                                           "y":  313.0
+                                                       },
+                                                       {
+                                                           "x":  403.0,
+                                                           "y":  306.0
+                                                       },
+                                                       {
+                                                           "x":  400.0,
+                                                           "y":  538.0
+                                                       },
+                                                       {
+                                                           "x":  167.0,
+                                                           "y":  549.0
+                                                       }
+                                                   ],
+                                       "warp_ok":  true,
+                                       "orientation_ok":  true,
+                                       "white_at_bottom":  null,
+                                       "fen":  null
+                                   },
+                      "notes":  "A annoter après revue visuelle dans le mode debug."
+                  },
+                  {
+                      "id":  "image_moyen_2",
+                      "image":  "assets/scan_samples/images/image moyen 2.webp",
+                      "type":  "screenshot",
+                      "difficulty":  "medium",
+                      "expected":  {
+                                       "board_detected":  true,
+                                       "corners":  [
+                                                       {
+                                                           "y":  196,
+                                                           "x":  50
+                                                       },
+                                                       {
+                                                           "y":  195,
+                                                           "x":  348
+                                                       },
+                                                       {
+                                                           "y":  497,
+                                                           "x":  347
+                                                       },
+                                                       {
+                                                           "y":  495,
+                                                           "x":  50
+                                                       }
+                                                   ],
+                                       "warp_ok":  true,
+                                       "orientation_ok":  true,
+                                       "white_at_bottom":  null,
+                                       "fen":  null
+                                   },
+                      "notes":  "Coins renseignes depuis annotation manuelle."
+                  },
+                  {
+                      "id":  "image_moyen_3",
+                      "image":  "assets/scan_samples/images/image moyen 3.webp",
+                      "type":  "screenshot",
+                      "difficulty":  "medium",
+                      "expected":  {
+                                       "board_detected":  true,
+                                       "corners":  [
+                                                       {
+                                                           "y":  150,
+                                                           "x":  518
+                                                       },
+                                                       {
+                                                           "y":  150,
+                                                           "x":  720
+                                                       },
+                                                       {
+                                                           "y":  353,
+                                                           "x":  722
+                                                       },
+                                                       {
+                                                           "y":  350,
+                                                           "x":  521
+                                                       }
+                                                   ],
+                                       "warp_ok":  true,
+                                       "orientation_ok":  true,
+                                       "white_at_bottom":  null,
+                                       "fen":  null
+                                   },
+                      "notes":  "Coins renseignes depuis annotation manuelle."
+                  },
+                  {
+                      "id":  "photo_diff_10_livre",
+                      "image":  "assets/scan_samples/images/photo diff 10 livre.webp",
+                      "type":  "photo",
+                      "difficulty":  "hard",
+                      "expected":  {
+                                       "board_detected":  true,
+                                       "corners":  [
+                                                       {
+                                                           "y":  103,
+                                                           "x":  113
+                                                       },
+                                                       {
+                                                           "y":  116,
+                                                           "x":  273
+                                                       },
+                                                       {
+                                                           "y":  311,
+                                                           "x":  210
+                                                       },
+                                                       {
+                                                           "y":  280,
+                                                           "x":  50
+                                                       }
+                                                   ],
+                                       "warp_ok":  true,
+                                       "orientation_ok":  true,
+                                       "white_at_bottom":  null,
+                                       "fen":  null
+                                   },
+                      "notes":  "Coins renseignes depuis annotation manuelle."
+                  },
+                  {
+                      "id":  "photo_diff_11_livre",
+                      "image":  "assets/scan_samples/images/photo diff 11 livre.webp",
+                      "type":  "photo",
+                      "difficulty":  "hard",
+                      "expected":  {
+                                       "board_detected":  true,
+                                       "corners":  [
+                                                       {
+                                                           "y":  177,
+                                                           "x":  96
+                                                       },
+                                                       {
+                                                           "y":  198,
+                                                           "x":  336
+                                                       },
+                                                       {
+                                                           "y":  451,
+                                                           "x":  316
+                                                       },
+                                                       {
+                                                           "y":  422,
+                                                           "x":  73
+                                                       }
+                                                   ],
+                                       "warp_ok":  true,
+                                       "orientation_ok":  true,
+                                       "white_at_bottom":  null,
+                                       "fen":  null
+                                   },
+                      "notes":  "Coins renseignes depuis annotation manuelle."
+                  },
+                  {
+                      "id":  "photo_diff_12_livre_angle",
+                      "image":  "assets/scan_samples/images/photo diff 12 livre angle.webp",
+                      "type":  "photo",
+                      "difficulty":  "hard",
+                      "expected":  {
+                                       "board_detected":  true,
+                                       "corners":  [
+                                                       {
+                                                           "y":  49,
+                                                           "x":  83
+                                                       },
+                                                       {
+                                                           "y":  11,
+                                                           "x":  227
+                                                       },
+                                                       {
+                                                           "y":  188,
+                                                           "x":  266
+                                                       },
+                                                       {
+                                                           "y":  251,
+                                                           "x":  96
+                                                       }
+                                                   ],
+                                       "warp_ok":  true,
+                                       "orientation_ok":  true,
+                                       "white_at_bottom":  null,
+                                       "fen":  null
+                                   },
+                      "notes":  "Coins renseignes depuis annotation manuelle."
+                  },
+                  {
+                      "id":  "photo_diff_2",
+                      "image":  "assets/scan_samples/images/photo diff 2.webp",
+                      "type":  "photo",
+                      "difficulty":  "hard",
+                      "expected":  {
+                                       "board_detected":  true,
+                                       "corners":  [
+                                                       {
+                                                           "y":  210,
+                                                           "x":  123
+                                                       },
+                                                       {
+                                                           "y":  164,
+                                                           "x":  284
+                                                       },
+                                                       {
+                                                           "y":  339,
+                                                           "x":  322
+                                                       },
+                                                       {
+                                                           "y":  368,
+                                                           "x":  160
+                                                       }
+                                                   ],
+                                       "warp_ok":  true,
+                                       "orientation_ok":  true,
+                                       "white_at_bottom":  null,
+                                       "fen":  null
+                                   },
+                      "notes":  "Coins renseignes depuis annotation manuelle."
+                  },
+                  {
+                      "id":  "photo_diff_3",
+                      "image":  "assets/scan_samples/images/photo diff 3.webp",
+                      "type":  "photo",
+                      "difficulty":  "hard",
+                      "expected":  {
+                                       "board_detected":  true,
+                                       "corners":  [
+                                                       {
+                                                           "y":  230,
+                                                           "x":  86
+                                                       },
+                                                       {
+                                                           "y":  221,
+                                                           "x":  318
+                                                       },
+                                                       {
+                                                           "y":  446,
+                                                           "x":  315
+                                                       },
+                                                       {
+                                                           "y":  451,
+                                                           "x":  98
+                                                       }
+                                                   ],
+                                       "warp_ok":  true,
+                                       "orientation_ok":  true,
+                                       "white_at_bottom":  null,
+                                       "fen":  null
+                                   },
+                      "notes":  "Coins renseignes depuis annotation manuelle."
+                  },
+                  {
+                      "id":  "photo_diff_4_flou",
+                      "image":  "assets/scan_samples/images/photo diff 4 flou.webp",
+                      "type":  "photo",
+                      "difficulty":  "hard",
+                      "expected":  {
+                                       "board_detected":  true,
+                                       "corners":  [
+                                                       {
+                                                           "y":  270,
+                                                           "x":  106
+                                                       },
+                                                       {
+                                                           "y":  252,
+                                                           "x":  283
+                                                       },
+                                                       {
+                                                           "y":  423,
+                                                           "x":  293
+                                                       },
+                                                       {
+                                                           "y":  436,
+                                                           "x":  126
+                                                       }
+                                                   ],
+                                       "warp_ok":  true,
+                                       "orientation_ok":  true,
+                                       "white_at_bottom":  null,
+                                       "fen":  null
+                                   },
+                      "notes":  "Coins renseignes depuis annotation manuelle."
+                  },
+                  {
+                      "id":  "photo_diff_5_flou",
+                      "image":  "assets/scan_samples/images/photo diff 5 flou.webp",
+                      "type":  "photo",
+                      "difficulty":  "hard",
+                      "expected":  {
+                                       "board_detected":  true,
+                                       "corners":  [
+                                                       {
+                                                           "y":  269,
+                                                           "x":  68
+                                                       },
+                                                       {
+                                                           "y":  254,
+                                                           "x":  245
+                                                       },
+                                                       {
+                                                           "y":  424,
+                                                           "x":  255
+                                                       },
+                                                       {
+                                                           "y":  438,
+                                                           "x":  87
+                                                       }
+                                                   ],
+                                       "warp_ok":  true,
+                                       "orientation_ok":  true,
+                                       "white_at_bottom":  null,
+                                       "fen":  null
+                                   },
+                      "notes":  "Coins renseignes depuis annotation manuelle."
+                  },
+                  {
+                      "id":  "photo_diff_6_angle",
+                      "image":  "assets/scan_samples/images/photo diff 6 angle.webp",
+                      "type":  "photo",
+                      "difficulty":  "hard",
+                      "expected":  {
+                                       "board_detected":  true,
+                                       "corners":  [
+                                                       {
+                                                           "y":  101,
+                                                           "x":  149
+                                                       },
+                                                       {
+                                                           "y":  138,
+                                                           "x":  358
+                                                       },
+                                                       {
+                                                           "y":  368,
+                                                           "x":  320
+                                                       },
+                                                       {
+                                                           "y":  399,
+                                                           "x":  130
+                                                       }
+                                                   ],
+                                       "warp_ok":  true,
+                                       "orientation_ok":  true,
+                                       "white_at_bottom":  null,
+                                       "fen":  null
+                                   },
+                      "notes":  "Coins renseignes depuis annotation manuelle."
+                  },
+                  {
+                      "id":  "photo_diff_7_angle",
+                      "image":  "assets/scan_samples/images/photo diff 7 angle.webp",
+                      "type":  "photo",
+                      "difficulty":  "hard",
+                      "expected":  {
+                                       "board_detected":  true,
+                                       "corners":  [
+                                                       {
+                                                           "y":  209,
+                                                           "x":  92
+                                                       },
+                                                       {
+                                                           "y":  207,
+                                                           "x":  288
+                                                       },
+                                                       {
+                                                           "y":  361,
+                                                           "x":  267
+                                                       },
+                                                       {
+                                                           "y":  367,
+                                                           "x":  105
+                                                       }
+                                                   ],
+                                       "warp_ok":  true,
+                                       "orientation_ok":  true,
+                                       "white_at_bottom":  null,
+                                       "fen":  null
+                                   },
+                      "notes":  "Coins renseignes depuis annotation manuelle."
+                  },
+                  {
+                      "id":  "photo_diff_8",
+                      "image":  "assets/scan_samples/images/photo diff 8.webp",
+                      "type":  "photo",
+                      "difficulty":  "hard",
+                      "expected":  {
+                                       "board_detected":  true,
+                                       "corners":  [
+                                                       {
+                                                           "y":  111,
+                                                           "x":  69
+                                                       },
+                                                       {
+                                                           "y":  88,
+                                                           "x":  277
+                                                       },
+                                                       {
+                                                           "y":  287,
+                                                           "x":  285
+                                                       },
+                                                       {
+                                                           "y":  312,
+                                                           "x":  106
+                                                       }
+                                                   ],
+                                       "warp_ok":  true,
+                                       "orientation_ok":  true,
+                                       "white_at_bottom":  null,
+                                       "fen":  null
+                                   },
+                      "notes":  "Coins renseignes depuis annotation manuelle."
+                  },
+                  {
+                      "id":  "photo_diff_9",
+                      "image":  "assets/scan_samples/images/photo diff 9.webp",
+                      "type":  "photo",
+                      "difficulty":  "hard",
+                      "expected":  {
+                                       "board_detected":  true,
+                                       "corners":  [
+                                                       {
+                                                           "y":  194,
+                                                           "x":  35
+                                                       },
+                                                       {
+                                                           "y":  114,
+                                                           "x":  219
+                                                       },
+                                                       {
+                                                           "y":  299,
+                                                           "x":  285
+                                                       },
+                                                       {
+                                                           "y":  367,
+                                                           "x":  120
+                                                       }
+                                                   ],
+                                       "warp_ok":  true,
+                                       "orientation_ok":  true,
+                                       "white_at_bottom":  null,
+                                       "fen":  null
+                                   },
+                      "notes":  "Coins renseignes depuis annotation manuelle."
+                  },
+                  {
+                      "id":  "no_board_1",
+                      "image":  "assets/scan_samples/images/no board 1.webp",
+                      "type":  "screenshot",
+                      "difficulty":  "hard",
+                      "expected":  {
+                                       "board_detected":  false,
+                                       "corners":  null,
+                                       "warp_ok":  false,
+                                       "orientation_ok":  false,
+                                       "white_at_bottom":  null,
+                                       "fen":  null
+                                   },
+                      "notes":  "Cas negatif (pas de plateau complet), a valider en mode debug."
+                  },
+                  {
+                      "id":  "no_board_2",
+                      "image":  "assets/scan_samples/images/no board 2.webp",
+                      "type":  "screenshot",
+                      "difficulty":  "hard",
+                      "expected":  {
+                                       "board_detected":  false,
+                                       "corners":  null,
+                                       "warp_ok":  false,
+                                       "orientation_ok":  false,
+                                       "white_at_bottom":  null,
+                                       "fen":  null
+                                   },
+                      "notes":  "Cas negatif (pas de plateau complet), a valider en mode debug."
+                  },
+                  {
+                      "id":  "no_board_3",
+                      "image":  "assets/scan_samples/images/no board 3.webp",
+                      "type":  "screenshot",
+                      "difficulty":  "hard",
+                      "expected":  {
+                                       "board_detected":  false,
+                                       "corners":  null,
+                                       "warp_ok":  false,
+                                       "orientation_ok":  false,
+                                       "white_at_bottom":  null,
+                                       "fen":  null
+                                   },
+                      "notes":  "Cas negatif (pas de plateau complet), a valider en mode debug."
+                  },
+                  {
+                      "id":  "no_board_4",
+                      "image":  "assets/scan_samples/images/no board 4.webp",
+                      "type":  "screenshot",
+                      "difficulty":  "hard",
+                      "expected":  {
+                                       "board_detected":  false,
+                                       "corners":  null,
+                                       "warp_ok":  false,
+                                       "orientation_ok":  false,
+                                       "white_at_bottom":  null,
+                                       "fen":  null
+                                   },
+                      "notes":  "Cas negatif (pas de plateau complet), a valider en mode debug."
+                  },
+                  {
+                      "id":  "no_board_5",
+                      "image":  "assets/scan_samples/images/no board 5.webp",
+                      "type":  "screenshot",
+                      "difficulty":  "hard",
+                      "expected":  {
+                                       "board_detected":  false,
+                                       "corners":  null,
+                                       "warp_ok":  false,
+                                       "orientation_ok":  false,
+                                       "white_at_bottom":  null,
+                                       "fen":  null
+                                   },
+                      "notes":  "Cas negatif (pas de plateau complet), a valider en mode debug."
+                  },
+                  {
+                      "id":  "photo_demi_board_2",
+                      "image":  "assets/scan_samples/images/photo demi board 2.webp",
+                      "type":  "photo",
+                      "difficulty":  "hard",
+                      "expected":  {
+                                       "board_detected":  false,
+                                       "corners":  null,
+                                       "warp_ok":  false,
+                                       "orientation_ok":  false,
+                                       "white_at_bottom":  null,
+                                       "fen":  null
+                                   },
+                      "notes":  "Cas negatif (demi plateau), pas de coins attendus."
+                  },
+                  {
+                      "id":  "photo_demi_board_3",
+                      "image":  "assets/scan_samples/images/photo demi board 3.webp",
+                      "type":  "photo",
+                      "difficulty":  "hard",
+                      "expected":  {
+                                       "board_detected":  false,
+                                       "corners":  null,
+                                       "warp_ok":  false,
+                                       "orientation_ok":  false,
+                                       "white_at_bottom":  null,
+                                       "fen":  null
+                                   },
+                      "notes":  "Cas negatif (demi plateau), pas de coins attendus."
+                  },
+                  {
+                      "id":  "photo_demi_board_4",
+                      "image":  "assets/scan_samples/images/photo demi board 4.webp",
+                      "type":  "photo",
+                      "difficulty":  "hard",
+                      "expected":  {
+                                       "board_detected":  false,
+                                       "corners":  null,
+                                       "warp_ok":  false,
+                                       "orientation_ok":  false,
+                                       "white_at_bottom":  null,
+                                       "fen":  null
+                                   },
+                      "notes":  "Cas negatif (demi plateau), pas de coins attendus."
+                  },
+                  {
+                      "id":  "photo_demi_board",
+                      "image":  "assets/scan_samples/images/photo demi board.webp",
+                      "type":  "photo",
+                      "difficulty":  "hard",
+                      "expected":  {
+                                       "board_detected":  false,
+                                       "corners":  null,
+                                       "warp_ok":  false,
+                                       "orientation_ok":  false,
+                                       "white_at_bottom":  null,
+                                       "fen":  null
+                                   },
+                      "notes":  "Cas negatif (demi plateau), pas de coins attendus."
+                  }
+              ]
+}

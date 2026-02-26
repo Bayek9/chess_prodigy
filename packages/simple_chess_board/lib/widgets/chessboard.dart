@@ -1077,8 +1077,7 @@ class _ChessBoardPainter extends CustomPainter {
             dragAndDropDetails?.startCell.$2 == rank;
         if (isTheMovedPiece) continue;
 
-        final squareName = coordinatesToSquareName(file, rank);
-        final piece = squares[squareName];
+        final piece = squares[coordinatesToSquareName(file, rank)];
 
         if (piece == null) continue;
         final pieceDefinition = piecesDefinition[piece.name];
@@ -1092,8 +1091,7 @@ class _ChessBoardPainter extends CustomPainter {
         canvas.scale(cellSize / baseImageSize, cellSize / baseImageSize);
 
         for (var vectorElement in pieceDefinition) {
-          vectorElement.paintIntoCanvas(
-              canvas, vectorElement.drawingParameters);
+          vectorElement.paintIntoCanvas(canvas, vectorElement.drawingParameters);
         }
 
         canvas.restore();
@@ -1204,5 +1202,3 @@ class _ChessBoardPainter extends CustomPainter {
 /*
 Adapted from https://www.codeproject.com/Questions/125049/Draw-an-arrow-with-big-cap */
 const files = ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h'];
-
-

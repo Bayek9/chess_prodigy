@@ -66,5 +66,9 @@
 		<string>UIInterfaceOrientationLandscapeLeft</string>
 		<string>UIInterfaceOrientationLandscapeRight</string>
 	</array>
+	<key>NSCameraUsageDescription</key>
+	<string>Allow camera access to scan chess positions.</string>
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>Allow photo library access to import a chess board image.</string>
 </dict>
 </plist>
