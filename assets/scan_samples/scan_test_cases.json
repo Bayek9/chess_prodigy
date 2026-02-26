@@ -32,7 +32,7 @@
                                        "warp_ok":  true,
                                        "orientation_ok":  true,
                                        "white_at_bottom":  null,
-                                       "fen":  null
+                                       "fen":  "k7/p1Nq1p2/Pb2p2p/6p1/Q3P1P1/7P/4K3/8 b - - 0 1"
                                    },
                       "notes":  "A annoter après revue visuelle dans le mode debug."
                   },
@@ -64,7 +64,7 @@
                                        "warp_ok":  true,
                                        "orientation_ok":  true,
                                        "white_at_bottom":  null,
-                                       "fen":  null
+                                       "fen":  "1bb1r2k/1p2q1pp/1p3p2/1r2n2Q/4R2N/1BP5/PP3PPP/3R2K1 w - - 0 1"
                                    },
                       "notes":  "A annoter après revue visuelle dans le mode debug."
                   },
@@ -96,7 +96,7 @@
                                        "warp_ok":  true,
                                        "orientation_ok":  true,
                                        "white_at_bottom":  null,
-                                       "fen":  null
+                                       "fen":  "Bn1K1R2/B1p5/2r3Q1/5N1R/3Nk3/2p5/4p2b/1r6 w - - 0 1"
                                    },
                       "notes":  "A annoter après revue visuelle dans le mode debug."
                   },
@@ -128,7 +128,7 @@
                                        "warp_ok":  true,
                                        "orientation_ok":  true,
                                        "white_at_bottom":  null,
-                                       "fen":  null
+                                       "fen":  "rnbqkbnr/pppp1p1p/8/6p1/4Pp1P/5N2/PPPP2P1/RNBQKB1R w KQkq - 0 1"
                                    },
                       "notes":  "A annoter après revue visuelle dans le mode debug."
                   },
@@ -160,7 +160,7 @@
                                        "warp_ok":  true,
                                        "orientation_ok":  true,
                                        "white_at_bottom":  null,
-                                       "fen":  null
+                                       "fen":  "2R5/5k1p/6p1/8/4rnP1/5N1P/8/6K1 w - - 0 1"
                                    },
                       "notes":  "A annoter après revue visuelle dans le mode debug."
                   },
@@ -192,7 +192,7 @@
                                        "warp_ok":  true,
                                        "orientation_ok":  true,
                                        "white_at_bottom":  null,
-                                       "fen":  null
+                                       "fen":  "8/3Q1pkp/4p1p1/2Pp4/1P1K4/8/r1q3PP/8 b - - 0 1"
                                    },
                       "notes":  "Coins renseignes depuis annotation manuelle."
                   },
@@ -224,7 +224,7 @@
                                        "warp_ok":  true,
                                        "orientation_ok":  true,
                                        "white_at_bottom":  null,
-                                       "fen":  null
+                                       "fen":  "8/pp3k2/2p2p2/8/KP6/2q5/r4P2/4R1R1 w - - 0 1"
                                    },
                       "notes":  "Coins renseignes depuis annotation manuelle."
                   },
@@ -256,7 +256,7 @@
                                        "warp_ok":  true,
                                        "orientation_ok":  true,
                                        "white_at_bottom":  null,
-                                       "fen":  null
+                                       "fen":  "4r1k1/5k1p/p2Pb1pB/2p1P1Q1/q3r3/6PP/1P3R1K/2R5 w - - 0 1"
                                    },
                       "notes":  "Coins renseignes depuis annotation manuelle."
                   },
@@ -288,7 +288,7 @@
                                        "warp_ok":  true,
                                        "orientation_ok":  true,
                                        "white_at_bottom":  null,
-                                       "fen":  null
+                                       "fen":  "r4rk1/pn3ppp/4pn2/q7/2p1P3/2P2N2/P1B1QPPP/2B2RK1 w - - 0 1"
                                    },
                       "notes":  "Coins renseignes depuis annotation manuelle."
                   },
@@ -320,7 +320,7 @@
                                        "warp_ok":  true,
                                        "orientation_ok":  true,
                                        "white_at_bottom":  null,
-                                       "fen":  null
+                                       "fen":  "7r/1Br2pk1/1Rp3pb/P1Pp1bnq/3Pp3/B3PpP1/R4N2/4QNK1 w - - 0 1"
                                    },
                       "notes":  "Coins renseignes depuis annotation manuelle."
                   },
@@ -352,7 +352,7 @@
                                        "warp_ok":  true,
                                        "orientation_ok":  true,
                                        "white_at_bottom":  null,
-                                       "fen":  null
+                                       "fen":  "rn1q1b1n/ppp1kppp/3p3n/4pb2/Q1P1PP2/3B1N2/PP1P2PP/RNB1K2R w KQ - 0 1"
                                    },
                       "notes":  "Coins renseignes depuis annotation manuelle."
                   },
@@ -384,7 +384,7 @@
                                        "warp_ok":  true,
                                        "orientation_ok":  true,
                                        "white_at_bottom":  null,
-                                       "fen":  null
+                                       "fen":  "rn1q1b1r/ppp1kppp/3p3n/4pb2/Q1P1PP2/3B1N2/PP1P2PP/RNB1K2R b KQ - 0 1"
                                    },
                       "notes":  "Coins renseignes depuis annotation manuelle."
                   },
@@ -416,7 +416,7 @@
                                        "warp_ok":  true,
                                        "orientation_ok":  true,
                                        "white_at_bottom":  null,
-                                       "fen":  null
+                                       "fen":  "rn1q1b1r/ppp1kppp/3p3n/4pb2/Q1P1PP2/3B1N2/PP1P2PP/RNB1K2R b KQ - 0 1"
                                    },
                       "notes":  "Coins renseignes depuis annotation manuelle."
                   },
@@ -448,7 +448,7 @@
                                        "warp_ok":  true,
                                        "orientation_ok":  true,
                                        "white_at_bottom":  null,
-                                       "fen":  null
+                                       "fen":  "rn1q1b1r/ppp1kppp/3p3n/4pb2/Q1P1PP2/3B1N2/PP1P2PP/RNB1K2R b KQ - 0 1"
                                    },
                       "notes":  "Coins renseignes depuis annotation manuelle."
                   },
@@ -480,7 +480,7 @@
                                        "warp_ok":  true,
                                        "orientation_ok":  true,
                                        "white_at_bottom":  null,
-                                       "fen":  null
+                                       "fen":  "r7/pq4k1/2p2p1p/3p1Bp1/3P4/2P4P/P1P3KB/4RR2 b - - 0 1"
                                    },
                       "notes":  "Coins renseignes depuis annotation manuelle."
                   },
@@ -512,7 +512,7 @@
                                        "warp_ok":  true,
                                        "orientation_ok":  true,
                                        "white_at_bottom":  null,
-                                       "fen":  null
+                                       "fen":  "r3q1k1/p7/2p2p1p/3p2p1/3P4/2PB3P/P1P3KB/3R1R2 b - - 0 1"
                                    },
                       "notes":  "Coins renseignes depuis annotation manuelle."
                   },
@@ -544,7 +544,7 @@
                                        "warp_ok":  true,
                                        "orientation_ok":  true,
                                        "white_at_bottom":  null,
-                                       "fen":  null
+                                       "fen":  "r7/5pkp/2p2qp1/1pNpNn2/1P1P4/r4P1P/3QR1P1/4R3 w - - 0 1"
                                    },
                       "notes":  "Coins renseignes depuis annotation manuelle."
                   },
@@ -576,7 +576,7 @@
                                        "warp_ok":  true,
                                        "orientation_ok":  true,
                                        "white_at_bottom":  null,
-                                       "fen":  null
+                                       "fen":  "5PN1/P5KP/2P5/2nP3P/6B1/1p2p2b/p1pp4/1k5r w - - 0 1"
                                    },
                       "notes":  "Coins renseignes depuis annotation manuelle."
                   },
