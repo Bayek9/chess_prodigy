@@ -50,4 +50,9 @@ packages/opencv_4/display/
 packages/opencv_4/example/
 /datasets/
 /.venv/
+/data/
+
+# Keep scan photos local only (not pushed to GitHub)
+assets/scan_samples/images/*
+!assets/scan_samples/images/.gitkeep
 data/
