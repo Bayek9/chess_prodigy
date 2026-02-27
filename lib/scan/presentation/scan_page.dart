@@ -1402,6 +1402,14 @@ class _ScanPageState extends State<ScanPage> {
                         color: Colors.white.withValues(alpha: 0.8),
                       ),
                     ),
+                    const SizedBox(height: 8),
+                    SelectableText(
+                      'Detector debug: ${_scanResult!.detectorDebug}',
+                      style: TextStyle(
+                        fontSize: 12,
+                        color: Colors.white.withValues(alpha: 0.8),
+                      ),
+                    ),
                   ],
                 ),
               ),
