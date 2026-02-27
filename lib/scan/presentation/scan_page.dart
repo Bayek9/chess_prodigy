@@ -211,15 +211,21 @@ class _ScanPageState extends State<ScanPage> {
       return _ScanCaptureDomain.photoReal;
     }
     if (source == ImageSource.gallery) {
-      if (looksScreenshot || !hasExif) {
+      if (looksScreenshot) {
         return _ScanCaptureDomain.screen;
+      }
+      if (hasExif) {
+        return _ScanCaptureDomain.photoReal;
       }
       return _ScanCaptureDomain.screen;
     }
-    if (looksScreenshot || !hasExif) {
+    if (looksScreenshot) {
       return _ScanCaptureDomain.screen;
     }
-    return _ScanCaptureDomain.photoReal;
+    if (hasExif) {
+      return _ScanCaptureDomain.photoReal;
+    }
+    return _ScanCaptureDomain.screen;
   }
 
   String _captureDomainLabel(_ScanCaptureDomain domain) {
@@ -1037,6 +1043,62 @@ class _ScanPageState extends State<ScanPage> {
                       style: TextStyle(
                         fontSize: 12,
                         color: Colors.white.withValues(alpha: 0.75),
+                      ),
+                    ),
+                  ],
+                  if (_selectedImage != null &&
+                      _selectedImageSource == ImageSource.gallery) ...[
+                    const SizedBox(height: 8),
+                    Text(
+                      'Override domaine (gallery)',
+                      style: TextStyle(
+                        fontSize: 12,
+                        color: Colors.white.withValues(alpha: 0.75),
+                      ),
+                    ),
+                    const SizedBox(height: 6),
+                    Wrap(
+                      spacing: 8,
+                      runSpacing: 8,
+                      children: [
+                        ChoiceChip(
+                          label: const Text('Photo reelle'),
+                          selected:
+                              _selectedCaptureDomain ==
+                              _ScanCaptureDomain.photoReal,
+                          onSelected: (selected) {
+                            if (!selected) {
+                              return;
+                            }
+                            setState(
+                              () => _selectedCaptureDomain =
+                                  _ScanCaptureDomain.photoReal,
+                            );
+                          },
+                        ),
+                        ChoiceChip(
+                          label: const Text('Screenshot / ecran'),
+                          selected:
+                              _selectedCaptureDomain ==
+                              _ScanCaptureDomain.screen,
+                          onSelected: (selected) {
+                            if (!selected) {
+                              return;
+                            }
+                            setState(
+                              () => _selectedCaptureDomain =
+                                  _ScanCaptureDomain.screen,
+                            );
+                          },
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      'EXIF et chemin screenshot sont des hints seulement.',
+                      style: TextStyle(
+                        fontSize: 11,
+                        color: Colors.white.withValues(alpha: 0.65),
                       ),
                     ),
                   ],
