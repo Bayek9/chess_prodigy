@@ -93,7 +93,7 @@ class _ChessHomePageState extends State<ChessHomePage> {
   int _aiRequestToken = 0;
   final math.Random _rng = math.Random();
   int _tabIndex = 0;
-  int _streakDays = 9; // temporaire
+  final int _streakDays = 9; // temporaire
 
   @override
   void initState() {
@@ -190,7 +190,7 @@ class _ChessHomePageState extends State<ChessHomePage> {
   Map<String, Color> _computeMateHighlights(String fen) {
     if (!_game.in_checkmate) return <String, Color>{};
 
-    // AprÃƒÂ¨s le coup gagnant, cÃ¢â‚¬â„¢est AU TOUR du perdant => cÃ¢â‚¬â„¢est lui qui est mat.
+    // AprÃƒÆ’Ã‚Â¨s le coup gagnant, cÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢est AU TOUR du perdant => cÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢est lui qui est mat.
     final turn = fen.split(' ')[1]; // 'w' ou 'b'
     final loserIsWhite = turn == 'w';
 
@@ -214,9 +214,9 @@ class _ChessHomePageState extends State<ChessHomePage> {
       _thinking = true;
     });
 
-    // DÃƒÂ©lai esthÃƒÂ©tique "humain" : 1 ÃƒÂ  2 secondes visibles aprÃƒÂ¨s ton coup.
+    // DÃƒÆ’Ã‚Â©lai esthÃƒÆ’Ã‚Â©tique "humain" : 1 ÃƒÆ’Ã‚Â  2 secondes visibles aprÃƒÆ’Ã‚Â¨s ton coup.
     // IMPORTANT : on ne change PAS bestMove(700) => pas d'impact sur le niveau.
-    // _queueAiMove attend dÃƒÂ©jÃƒÂ  280ms, donc on vise 700..1700ms ici => ~980..1980ms visibles.
+    // _queueAiMove attend dÃƒÆ’Ã‚Â©jÃƒÆ’Ã‚Â  280ms, donc on vise 700..1700ms ici => ~980..1980ms visibles.
     final sw = Stopwatch()..start();
     final targetMs = 700 + _rng.nextInt(1001); // 700..1700
 
@@ -224,7 +224,7 @@ class _ChessHomePageState extends State<ChessHomePage> {
     if (_engineReady) {
       try {
         await _engine.setPosition(_game.fen);
-        uciMove = await _engine.bestMove(700); // on garde 700ms = mÃƒÂªme force
+        uciMove = await _engine.bestMove(700); // on garde 700ms = mÃƒÆ’Ã‚Âªme force
       } catch (_) {
         uciMove = null;
       }
@@ -237,7 +237,7 @@ class _ChessHomePageState extends State<ChessHomePage> {
       return;
     }
 
-    // Attente esthÃƒÂ©tique (sans effet sur la force)
+    // Attente esthÃƒÆ’Ã‚Â©tique (sans effet sur la force)
     final remainingMs = targetMs - sw.elapsedMilliseconds;
     if (remainingMs > 0) {
       await Future.delayed(Duration(milliseconds: remainingMs));
@@ -286,41 +286,6 @@ class _ChessHomePageState extends State<ChessHomePage> {
     );
     if (!applied || _game.game_over) return;
     _queueAiMove();
-  }
-
-  Future<void> _newGame() async {
-    // Annule les timers (IA / elo debounce)
-    _aiDebounceTimer?.cancel();
-    _eloDebounce?.cancel();
-
-    // Invalide toute requÃƒÆ’Ã‚Âªte IA en cours (si un bestMove revient, il sera ignorÃƒÆ’Ã‚Â©)
-    _aiRequestToken++;
-
-    // Reset logique du jeu (revient ÃƒÆ’Ã‚Â  la position initiale)
-    _game.reset();
-    final startFen = _game.fen;
-
-    if (!mounted) return;
-
-    // Reset UI
-    setState(() {
-      _fen = startFen;
-      _lastMoveArrow = null;
-      _thinking = false;
-      _cellHighlights = <String, Color>{};
-    });
-
-    // Reset moteur (position de dÃƒÆ’Ã‚Â©part)
-    if (_engineReady) {
-      try {
-        await _engine.newGame();
-        await _engine.setPosition(startFen);
-        // optionnel: rÃƒÆ’Ã‚Â©-applique l'Elo actuel (pas obligatoire si tu l'as deja)
-        await _engine.setTargetElo(_engineElo);
-      } catch (_) {
-        // ignore
-      }
-    }
   }
 
   MaterialPageRoute<void> _buildGamePageRoute() {
@@ -1564,8 +1529,8 @@ class _ZoomNavItemState extends State<_ZoomNavItem>
   }
 
   void _handleTap() {
-    widget.onTap(widget.tabIndex); // sÃƒÂ©lection immÃƒÂ©diate (blanc/gris)
-    _c.forward(from: 0); // pulse immÃƒÂ©diat (zoom/dezoom)
+    widget.onTap(widget.tabIndex); // sÃƒÆ’Ã‚Â©lection immÃƒÆ’Ã‚Â©diate (blanc/gris)
+    _c.forward(from: 0); // pulse immÃƒÆ’Ã‚Â©diat (zoom/dezoom)
   }
 
   @override

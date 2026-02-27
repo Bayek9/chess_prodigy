@@ -44,7 +44,7 @@ PIECE_LABELS = [
     "bK",
 ]
 
-DOMAIN_VALUES = ("photo_real", "photo_screen", "screenshot", "unknown")
+DOMAIN_VALUES = ("photo_real", "photo_print", "photo_screen", "screenshot")
 
 
 def parse_args() -> argparse.Namespace:
@@ -78,7 +78,7 @@ def parse_args() -> argparse.Namespace:
         default=True,
         help=(
             "Also copy board/no_board into domain-specific folders to avoid mixing "
-            "photo_real vs photo_screen vs screenshot."
+            "photo_real vs photo_print vs photo_screen vs screenshot."
         ),
     )
     return parser.parse_args()
@@ -176,12 +176,16 @@ def normalize_capture_domain(raw: Any) -> str | None:
         "real_photo": "photo_real",
         "real_board": "photo_real",
         "board_photo": "photo_real",
+        "photo_print": "photo_print",
+        "photo_book": "photo_print",
+        "book_photo": "photo_print",
+        "printed_board": "photo_print",
+        "print_board": "photo_print",
         "photo_screen": "photo_screen",
         "screen_photo": "photo_screen",
         "photo_of_screen": "photo_screen",
         "screen": "photo_screen",
         "screenshot": "screenshot",
-        "unknown": "unknown",
     }
     return aliases.get(key)
 
@@ -195,7 +199,22 @@ def infer_capture_domain(case_id: str, image_rel: str, case_type: Any, explicit_
     if type_key == "screenshot":
         return "screenshot"
 
+    if type_key in {"photo_print", "photo_book", "book", "print"}:
+        return "photo_print"
+
     haystack = f"{case_id} {image_rel}".lower()
+    print_keywords = (
+        "book",
+        "livre",
+        "printed",
+        "print",
+        "paper",
+        "magazine",
+        "manual",
+    )
+    if any(word in haystack for word in print_keywords):
+        return "photo_print"
+
     screen_keywords = (
         "screen",
         "ecran",
@@ -215,7 +234,8 @@ def infer_capture_domain(case_id: str, image_rel: str, case_type: Any, explicit_
     if type_key == "photo":
         return "photo_real"
 
-    return "unknown"
+    # Keep output in the declared domain layout.
+    return "photo_real"
 
 
 def main() -> None:

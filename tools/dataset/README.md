@@ -97,7 +97,7 @@ python tools/dataset/extract_real_scan_dataset.py `
 Output:
 
 - `datasets/real_scan/board_binary/{board,no_board}/*`
-- `datasets/real_scan/board_binary_domain/{photo_real,photo_screen,screenshot,unknown}/{board,no_board}/*`
+- `datasets/real_scan/board_binary_domain/{photo_real,photo_print,photo_screen,screenshot}/{board,no_board}/*`
 - `datasets/real_scan/warped_boards/*.png` (for cases with corners)
 - `datasets/real_scan/piece_crops_real/{label}/*.png` only if `expected.fen` exists
 - `datasets/real_scan/labels/real_piece_samples.csv`
@@ -107,7 +107,7 @@ Notes:
 
 - Domain separation is enabled by default (`--split-domains`).
 - You can override per-case domain in JSON with:
-  - `"capture_domain": "photo_real"` or `"photo_screen"` or `"screenshot"`.
+  - `"capture_domain": "photo_real"` or `"photo_print"` or `"photo_screen"` or `"screenshot"`.
 - This avoids mixing true board photos with screen photos during training.
 
 ## 4) Training strategy
@@ -116,7 +116,7 @@ Notes:
 - Add real labeled crops when you have reliable FEN on real cases.
 - Keep validation/test sets fully real to measure true performance.
 - For board detection, use `board_binary` with your `no_board*` and `photo_demi_board*` negatives.
-- Do not mix 2D diagrams/screenshots with real-photo board detection data.
+- Do not mix 2D diagrams/screenshots with photo domains (`photo_real` / `photo_print`) for board detection.
   Keep them in separate folders and train separately.
 
 ## 4.1) Strict import for board/no_board (no 2D mix)
@@ -148,6 +148,7 @@ Train:
 ```powershell
 python tools/dataset/train_board_binary_classifier.py `
   --data-dir datasets/real_scan/board_binary_domain/photo_real `
+  --data-dir datasets/real_scan/board_binary_domain/photo_print `
   --data-dir datasets/external/board_binary_real `
   --data-dir datasets/external/board_binary_no_board `
   --output-dir models/board_binary `
@@ -185,6 +186,7 @@ After training, calibrate on the real data mix with a strict split:
 python tools/dataset/calibrate_board_threshold.py `
   --model-path models/board_binary/board_binary.keras `
   --data-dir datasets/real_scan/board_binary_domain/photo_real `
+  --data-dir datasets/real_scan/board_binary_domain/photo_print `
   --data-dir datasets/external/board_binary_real `
   --data-dir datasets/external/board_binary_no_board `
   --val-split 0.2 `
@@ -203,6 +205,7 @@ Optional hard-negative export (opt-in, quota-limited):
 python tools/dataset/calibrate_board_threshold.py `
   --model-path models/board_binary/board_binary.keras `
   --data-dir datasets/real_scan/board_binary_domain/photo_real `
+  --data-dir datasets/real_scan/board_binary_domain/photo_print `
   --data-dir datasets/external/board_binary_real `
   --data-dir datasets/external/board_binary_no_board `
   --hard-negatives-dir datasets/real_scan/hard_examples `
@@ -226,24 +229,30 @@ For 2D screen routing (`screenshot` / `photo_screen`), do not use real-world neg
 (e.g. `datasets/external/board_binary_no_board`) during calibration.
 Use same-domain negatives only.
 
-Create a dedicated negative folder:
+Recommended split for screen negatives:
+
+- Originals: `datasets/real_scan/board_binary/no_board_screen/`
+- Augmented copies (train-only): `datasets/real_scan/board_binary/no_board_screen_aug/`
 
 ```powershell
 New-Item -ItemType Directory -Force datasets/real_scan/board_binary/no_board_screen | Out-Null
+New-Item -ItemType Directory -Force datasets/real_scan/board_binary/no_board_screen_aug | Out-Null
 ```
 
-Then add screenshots of non-chess UI (apps, web pages, settings, chat, gallery) into:
-`datasets/real_scan/board_binary/no_board_screen/`
-
-Train/calibrate screen domain only:
+Training command (includes augmented negatives):
 
 ```powershell
 python tools/dataset/train_board_binary_classifier.py `
   --data-dir datasets/real_scan/board_binary_domain/photo_screen `
   --data-dir datasets/real_scan/board_binary_domain/screenshot `
   --data-dir datasets/real_scan/board_binary/no_board_screen `
+  --data-dir datasets/real_scan/board_binary/no_board_screen_aug `
   --output-dir models/board_binary_screen
+```
 
+Calibration command (original negatives only; no `_aug`):
+
+```powershell
 python tools/dataset/calibrate_board_threshold.py `
   --model-path models/board_binary_screen/board_binary.keras `
   --data-dir datasets/real_scan/board_binary_domain/photo_screen `
@@ -254,8 +263,10 @@ python tools/dataset/calibrate_board_threshold.py `
   --output-json models/board_binary_screen/threshold_calibration_screen.json
 ```
 
-`train_board_binary_classifier.py` and `calibrate_board_threshold.py` now accept direct
+`train_board_binary_classifier.py` and `calibrate_board_threshold.py` accept direct
 class directories like `no_board_screen/` as negative-only inputs.
+`calibrate_board_threshold.py` now blocks `*_aug/*augmented*` by default to avoid leakage
+(use `--allow-augmented-data` only if you intentionally override this).
 
 ## 6) Increase no_board / board counts quickly
 

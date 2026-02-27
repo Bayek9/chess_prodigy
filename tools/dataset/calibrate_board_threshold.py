@@ -89,6 +89,14 @@ def parse_args() -> argparse.Namespace:
             "Can repeat."
         ),
     )
+    parser.add_argument(
+        "--allow-augmented-data",
+        action="store_true",
+        help=(
+            "Allow *_aug/*augmented* dirs in calibration data. "
+            "Disabled by default to avoid train/val/test leakage."
+        ),
+    )
     parser.add_argument("--image-size", type=int, default=192)
     parser.add_argument("--batch-size", type=int, default=64)
     parser.add_argument("--seed", type=int, default=42)
@@ -201,6 +209,10 @@ def collect_samples(data_roots: list[Path]) -> list[Sample]:
             for path in list_images(class_dir):
                 samples.append(Sample(path=str(path), label=label))
     return samples
+
+def _is_augmented_data_root(path: Path) -> bool:
+    text = "/".join(part.lower() for part in path.parts)
+    return "_aug" in text or "augmented" in text
 
 
 def filter_decodable(samples: list[Sample]) -> tuple[list[Sample], int]:
@@ -654,6 +666,15 @@ def main() -> None:
     for root in data_roots:
         if not root.exists():
             raise SystemExit(f"data-dir not found: {root}")
+
+    augmented_roots = [root for root in data_roots if _is_augmented_data_root(root)]
+    if augmented_roots and not args.allow_augmented_data:
+        joined = ", ".join(str(p) for p in augmented_roots)
+        raise SystemExit(
+            "Refusing augmented dirs for calibration (val/test leakage risk). "
+            "Use original data only, or pass --allow-augmented-data to override. "
+            f"Found: {joined}"
+        )
 
     samples = collect_samples(data_roots)
     if not samples:

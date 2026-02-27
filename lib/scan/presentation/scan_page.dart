@@ -375,12 +375,7 @@ class _ScanPageState extends State<ScanPage> {
     final acceptCount = _gateDecisionCounters['strong_accept'] ?? 0;
     if (kDebugMode) {
       debugPrint(
-        '[gate-metrics] reject=' +
-            rejectCount.toString() +
-            ' gray=' +
-            grayCount.toString() +
-            ' accept=' +
-            acceptCount.toString(),
+        '[gate-metrics] reject=$rejectCount gray=$grayCount accept=$acceptCount',
       );
     }
   }
