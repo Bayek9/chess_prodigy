@@ -23,7 +23,7 @@ import '../domain/usecases/scan_position_use_case.dart';
 import 'widgets/board_correction_editor.dart';
 import 'widgets/piece_chooser_sheet.dart';
 
-enum _ScanCaptureDomain { photoReal, screen }
+enum _ScanCaptureDomain { photoReal, photoPrint, screen }
 
 class ScanPage extends StatefulWidget {
   const ScanPage({super.key, required this.onAnalyzeFen});
@@ -40,11 +40,12 @@ class _ScanPageState extends State<ScanPage> {
   static const double _photoRealRejectThreshold = 0.60;
   static const double _screenAcceptThreshold = 0.54;
   static const double _screenRejectThreshold = 0.41;
-  static const double _screenOpenCvMinBoardConfidence = 0.38;
-  static const double _screenOpenCvMinBoardConfidenceLineFallback = 0.42;
-  static const double _screenLooseRetryStrongProbability = 0.70;
-  static const double _screenLooseOpenCvMinBoardConfidence = 0.24;
-  static const double _screenLooseOpenCvMinBoardConfidenceLineFallback = 0.28;
+  static const double _screenOpenCvMinBoardConfidence = 0.30;
+  static const double _screenOpenCvMinBoardConfidenceLineFallback = 0.34;
+  static const double _screenLooseRetryStrongProbability = 0.55;
+  static const double _screenLooseOpenCvMinBoardConfidence = 0.20;
+  static const double _screenLooseOpenCvMinBoardConfidenceLineFallback = 0.24;
+  static const double _screenMinPostWarpGridness = 0.11;
   static const String _photoRealBoardModelAssetPath =
       'assets/scan_models/board_binary.tflite';
   static const String _screenBoardModelAssetPath =
@@ -116,6 +117,7 @@ class _ScanPageState extends State<ScanPage> {
       openCvMinBoardConfidence: _screenOpenCvMinBoardConfidence,
       openCvMinBoardConfidenceLineFallback:
           _screenOpenCvMinBoardConfidenceLineFallback,
+      minPostWarpGridness: _screenMinPostWarpGridness,
     );
     _scanUseCaseScreenLoose = DefaultScanPipelineFactory.create(
       validator: _validator,
@@ -128,6 +130,7 @@ class _ScanPageState extends State<ScanPage> {
       openCvMinBoardConfidence: _screenLooseOpenCvMinBoardConfidence,
       openCvMinBoardConfidenceLineFallback:
           _screenLooseOpenCvMinBoardConfidenceLineFallback,
+      minPostWarpGridness: _screenMinPostWarpGridness,
     );
     _datasetScanUseCase = DefaultScanPipelineFactory.create(
       validator: _validator,
@@ -214,13 +217,18 @@ class _ScanPageState extends State<ScanPage> {
           'decision=reject_strong_no_board',
         );
         if (!isStrongReject) {
+          final gateAllowed = _extractGateAllowed(detectorDebug) ?? false;
           final strongProbability = _extractStrongProbability(detectorDebug);
-          if (strongProbability != null &&
-              strongProbability >= _screenLooseRetryStrongProbability) {
+          final shouldRetryLoose =
+              gateAllowed ||
+              (strongProbability != null &&
+                  strongProbability >= _screenLooseRetryStrongProbability);
+          if (shouldRetryLoose) {
             final looseResult = await _scanUseCaseScreenLoose.execute(image);
             if (kDebugMode) {
               debugPrint(
-                '[scan][screen-retry] strong_prob=${strongProbability.toStringAsFixed(3)} '
+                '[scan][screen-retry] gate_allowed=$gateAllowed '
+                'strong_prob=${strongProbability?.toStringAsFixed(3) ?? "na"} '
                 'threshold=${_screenLooseRetryStrongProbability.toStringAsFixed(3)} '
                 'loose_detected=${looseResult.boardDetected}',
               );
@@ -254,6 +262,7 @@ class _ScanPageState extends State<ScanPage> {
   ScanPositionUseCase _scanUseCaseForDomain(_ScanCaptureDomain domain) {
     switch (domain) {
       case _ScanCaptureDomain.photoReal:
+      case _ScanCaptureDomain.photoPrint:
         return _scanUseCasePhotoReal;
       case _ScanCaptureDomain.screen:
         return _scanUseCaseScreen;
@@ -268,6 +277,31 @@ class _ScanPageState extends State<ScanPage> {
       return null;
     }
     return double.tryParse(match.group(1)!);
+  }
+
+  bool? _extractGateAllowed(String detectorDebug) {
+    final match = RegExp(r'allowed=(true|false)').firstMatch(detectorDebug);
+    if (match == null || match.groupCount < 1) {
+      return null;
+    }
+    final value = match.group(1);
+    if (value == 'true') {
+      return true;
+    }
+    if (value == 'false') {
+      return false;
+    }
+    return null;
+  }
+
+  String _gateAllowedLabel(ScanPipelineResult result) {
+    final allowed = _extractGateAllowed(result.detectorDebug);
+    return allowed == null ? 'unknown' : allowed.toString();
+  }
+
+  bool _isGateFinalMismatch(ScanPipelineResult result) {
+    final allowed = _extractGateAllowed(result.detectorDebug);
+    return allowed != null && allowed != result.boardDetected;
   }
 
   _ScanCaptureDomain _resolveCaptureDomain({
@@ -297,7 +331,14 @@ class _ScanPageState extends State<ScanPage> {
   }
 
   String _captureDomainLabel(_ScanCaptureDomain domain) {
-    return domain == _ScanCaptureDomain.photoReal ? 'photo_real' : 'screen';
+    switch (domain) {
+      case _ScanCaptureDomain.photoReal:
+        return 'photo_real';
+      case _ScanCaptureDomain.photoPrint:
+        return 'photo_print';
+      case _ScanCaptureDomain.screen:
+        return 'screen';
+    }
   }
 
   String _selectedImageSourceLabel() {
@@ -1192,6 +1233,21 @@ class _ScanPageState extends State<ScanPage> {
                           },
                         ),
                         ChoiceChip(
+                          label: const Text('Photo imprimee (livre)'),
+                          selected:
+                              _selectedCaptureDomain ==
+                              _ScanCaptureDomain.photoPrint,
+                          onSelected: (selected) {
+                            if (!selected) {
+                              return;
+                            }
+                            setState(
+                              () => _selectedCaptureDomain =
+                                  _ScanCaptureDomain.photoPrint,
+                            );
+                          },
+                        ),
+                        ChoiceChip(
                           label: const Text('Screenshot / ecran'),
                           selected:
                               _selectedCaptureDomain ==
@@ -1450,7 +1506,8 @@ class _ScanPageState extends State<ScanPage> {
               _SectionCard(
                 title: 'Detected board',
                 subtitle:
-                    'Corners: ${_scanResult!.geometry.corners.length}/4 (OpenCV hybrid detector)',
+                    'OpenCV final verdict: board=${_scanResult!.boardDetected} '
+                    'corners=${_scanResult!.geometry.corners.length}/4',
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
@@ -1458,12 +1515,40 @@ class _ScanPageState extends State<ScanPage> {
                       _ImagePreview(bytes: rectifiedBytes),
                     const SizedBox(height: 8),
                     Text(
-                      'Detected corners: ${_formatCorners(_scanResult)}',
+                      'Gate allowed: ${_gateAllowedLabel(_scanResult!)} | '
+                      'Final boardDetected: ${_scanResult!.boardDetected}',
                       style: TextStyle(
                         fontSize: 12,
                         color: Colors.white.withValues(alpha: 0.8),
                       ),
                     ),
+                    if (_isGateFinalMismatch(_scanResult!)) ...[
+                      const SizedBox(height: 4),
+                      Text(
+                        'gateAllowed != boardDetected',
+                        style: const TextStyle(
+                          fontSize: 12,
+                          color: Colors.amberAccent,
+                        ),
+                      ),
+                    ],
+                    const SizedBox(height: 8),
+                    if (_scanResult!.boardDetected)
+                      Text(
+                        'Detected corners: ${_formatCorners(_scanResult)}',
+                        style: TextStyle(
+                          fontSize: 12,
+                          color: Colors.white.withValues(alpha: 0.8),
+                        ),
+                      )
+                    else
+                      Text(
+                        'No board detected: quad hidden',
+                        style: TextStyle(
+                          fontSize: 12,
+                          color: Colors.white.withValues(alpha: 0.75),
+                        ),
+                      ),
                     const SizedBox(height: 8),
                     SelectableText(
                       'Detector debug: ${_scanResult!.detectorDebug}',

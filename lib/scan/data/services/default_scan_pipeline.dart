@@ -33,6 +33,7 @@ class DefaultScanPipelineFactory {
     bool useFallbackForReject = true,
     double openCvMinBoardConfidence = 0.20,
     double openCvMinBoardConfidenceLineFallback = 0.24,
+    double minPostWarpGridness = 0.0,
   }) {
     final fallbackDetector = const StatisticalBoardDetector();
     final boardPresenceClassifier = useBoardPresenceGate
@@ -65,6 +66,7 @@ class DefaultScanPipelineFactory {
       boardPresenceThreshold: boardPresenceThreshold,
       boardPresenceRejectThreshold: boardPresenceRejectThreshold,
       useFallbackForReject: useFallbackForReject,
+      minPostWarpGridness: minPostWarpGridness,
     );
   }
 }
