@@ -25,6 +25,8 @@ class OpenCvHybridBoardDetector implements BoardDetector {
     this.checkerTargetSize = 256,
     this.maxOpenCvVariants = 6,
     this.useLightPreprocessSet = false,
+    this.minBoardConfidence = 0.20,
+    this.minBoardConfidenceLineFallback = 0.24,
   }) : _fallback = fallback ?? const StatisticalBoardDetector();
 
   final BoardDetector _fallback;
@@ -33,6 +35,8 @@ class OpenCvHybridBoardDetector implements BoardDetector {
   final int checkerTargetSize;
   final int maxOpenCvVariants;
   final bool useLightPreprocessSet;
+  final double minBoardConfidence;
+  final double minBoardConfidenceLineFallback;
 
   @override
   Future<BoardGeometry> detect(ScanInputImage image) async {
@@ -897,7 +901,9 @@ class OpenCvHybridBoardDetector implements BoardDetector {
     if (areaRatio < 0.05 || areaRatio > 0.88) {
       return false;
     }
-    final minConfidence = lineFallbackAccepted ? 0.24 : 0.20;
+    final minConfidence = lineFallbackAccepted
+        ? minBoardConfidenceLineFallback
+        : minBoardConfidence;
     if (confidence < minConfidence) {
       return false;
     }

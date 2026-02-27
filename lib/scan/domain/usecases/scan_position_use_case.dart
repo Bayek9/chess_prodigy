@@ -53,6 +53,7 @@ class ScanPositionUseCase {
     BoardPresenceClassifier? boardPresenceClassifier,
     double boardPresenceThreshold = 0.89,
     double boardPresenceRejectThreshold = 0.60,
+    bool useFallbackForReject = true,
   }) : _detector = detector,
        _rectifier = rectifier,
        _classifier = classifier,
@@ -60,7 +61,8 @@ class ScanPositionUseCase {
        _fenBuilder = fenBuilder,
        _boardPresenceClassifier = boardPresenceClassifier,
        _boardPresenceThreshold = boardPresenceThreshold,
-       _boardPresenceRejectThreshold = boardPresenceRejectThreshold;
+       _boardPresenceRejectThreshold = boardPresenceRejectThreshold,
+       _useFallbackForReject = useFallbackForReject;
 
   final BoardDetector _detector;
   final BoardRectifier _rectifier;
@@ -70,6 +72,7 @@ class ScanPositionUseCase {
   final BoardPresenceClassifier? _boardPresenceClassifier;
   final double _boardPresenceThreshold;
   final double _boardPresenceRejectThreshold;
+  final bool _useFallbackForReject;
 
   Future<ScanPipelineResult> execute(ScanInputImage image) async {
     var gateDebug = 'gate=disabled';
@@ -87,9 +90,13 @@ class ScanPositionUseCase {
           0.0,
           1.0,
         );
+        final rejectProbability =
+            (_useFallbackForReject ? fallbackProbability : strongProbability)
+                .clamp(0.0, 1.0);
+        final rejectSource = _useFallbackForReject ? 'fallback' : 'strong';
 
         final isStrongAccept = strongProbability >= acceptThreshold;
-        final isStrongReject = fallbackProbability < rejectThreshold;
+        final isStrongReject = rejectProbability < rejectThreshold;
 
         final allowed = !isStrongReject;
         final decision = isStrongAccept
@@ -102,6 +109,8 @@ class ScanPositionUseCase {
             'gate=${prediction.source} '
             'strong_prob=${strongProbability.toStringAsFixed(3)} '
             'fallback_prob=${fallbackProbability.toStringAsFixed(3)} '
+            'reject_prob=${rejectProbability.toStringAsFixed(3)} '
+            'reject_source=$rejectSource '
             'accept_threshold=${acceptThreshold.toStringAsFixed(3)} '
             'reject_threshold=${rejectThreshold.toStringAsFixed(3)} '
             'decision=$decision '

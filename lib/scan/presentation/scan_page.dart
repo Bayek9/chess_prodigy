@@ -38,6 +38,8 @@ class _ScanPageState extends State<ScanPage> {
   static const double _photoRealRejectThreshold = 0.60;
   static const double _screenAcceptThreshold = 0.54;
   static const double _screenRejectThreshold = 0.41;
+  static const double _screenOpenCvMinBoardConfidence = 0.38;
+  static const double _screenOpenCvMinBoardConfidenceLineFallback = 0.42;
   static const String _photoRealBoardModelAssetPath =
       'assets/scan_models/board_binary.tflite';
   static const String _screenBoardModelAssetPath =
@@ -92,6 +94,7 @@ class _ScanPageState extends State<ScanPage> {
       boardPresenceThreshold: _photoRealAcceptThreshold,
       boardPresenceRejectThreshold: _photoRealRejectThreshold,
       boardPresenceModelAssetPath: _photoRealBoardModelAssetPath,
+      useFallbackForReject: true,
     );
     _scanUseCaseScreen = DefaultScanPipelineFactory.create(
       validator: _validator,
@@ -100,6 +103,10 @@ class _ScanPageState extends State<ScanPage> {
       boardPresenceThreshold: _screenAcceptThreshold,
       boardPresenceRejectThreshold: _screenRejectThreshold,
       boardPresenceModelAssetPath: _screenBoardModelAssetPath,
+      useFallbackForReject: false,
+      openCvMinBoardConfidence: _screenOpenCvMinBoardConfidence,
+      openCvMinBoardConfidenceLineFallback:
+          _screenOpenCvMinBoardConfidenceLineFallback,
     );
     _datasetScanUseCase = DefaultScanPipelineFactory.create(
       validator: _validator,

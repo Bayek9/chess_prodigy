@@ -30,6 +30,9 @@ class DefaultScanPipelineFactory {
     String boardPresenceModelAssetPath = _defaultBoardPresenceModelAssetPath,
     double boardPresenceThreshold = _defaultBoardPresenceThreshold,
     double boardPresenceRejectThreshold = _defaultBoardPresenceRejectThreshold,
+    bool useFallbackForReject = true,
+    double openCvMinBoardConfidence = 0.20,
+    double openCvMinBoardConfidenceLineFallback = 0.24,
   }) {
     final fallbackDetector = const StatisticalBoardDetector();
     final boardPresenceClassifier = useBoardPresenceGate
@@ -49,6 +52,9 @@ class DefaultScanPipelineFactory {
               checkerTargetSize: lowLatencyDetector ? 128 : 256,
               maxOpenCvVariants: lowLatencyDetector ? 3 : 6,
               useLightPreprocessSet: lowLatencyDetector,
+              minBoardConfidence: openCvMinBoardConfidence,
+              minBoardConfidenceLineFallback:
+                  openCvMinBoardConfidenceLineFallback,
             )
           : fallbackDetector,
       rectifier: const MockBoardRectifier(),
@@ -58,6 +64,7 @@ class DefaultScanPipelineFactory {
       boardPresenceClassifier: boardPresenceClassifier,
       boardPresenceThreshold: boardPresenceThreshold,
       boardPresenceRejectThreshold: boardPresenceRejectThreshold,
+      useFallbackForReject: useFallbackForReject,
     );
   }
 }
