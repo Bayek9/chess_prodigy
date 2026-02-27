@@ -256,6 +256,11 @@ class _ScanPageState extends State<ScanPage> {
   }
 
   String _gateDecisionBucket(String detectorDebug) {
+    // Final detector verdict takes precedence over the gate-only decision.
+    if (detectorDebug.contains('board_rejected=true') ||
+        detectorDebug.contains('which_path_won=rejected_')) {
+      return 'strong_reject';
+    }
     if (detectorDebug.contains('decision=reject_strong_no_board')) {
       return 'strong_reject';
     }
