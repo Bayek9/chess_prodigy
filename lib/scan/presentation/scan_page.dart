@@ -4,6 +4,7 @@ import 'dart:ui' as ui;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:image_picker/image_picker.dart';
+import 'package:tflite_flutter/tflite_flutter.dart' as tfl;
 
 import '../data/services/asset_scan_validation_dataset_loader.dart';
 import '../data/services/basic_fen_builder.dart';
@@ -87,6 +88,7 @@ class _ScanPageState extends State<ScanPage> {
   @override
   void initState() {
     super.initState();
+    debugPrint('[scan][tflite] runtime=${tfl.version}');
     _scanUseCasePhotoReal = DefaultScanPipelineFactory.create(
       validator: _validator,
       fenBuilder: _fenBuilder,
