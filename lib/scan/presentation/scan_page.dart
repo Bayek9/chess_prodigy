@@ -36,12 +36,12 @@ class _ScanPageState extends State<ScanPage> {
   static const String _scanCoreRevision = 'scan-core-r2026-02-27-01';
   static const double _photoRealAcceptThreshold = 0.89;
   static const double _photoRealRejectThreshold = 0.60;
-  static const double _screenAcceptThreshold = 0.89;
-  static const double _screenRejectThreshold = 0.60;
+  static const double _screenAcceptThreshold = 0.54;
+  static const double _screenRejectThreshold = 0.41;
   static const String _photoRealBoardModelAssetPath =
       'assets/scan_models/board_binary.tflite';
   static const String _screenBoardModelAssetPath =
-      'assets/scan_models/board_binary.tflite';
+      'assets/scan_models/board_binary_screen.tflite';
 
   final ImagePicker _picker = ImagePicker();
   final GridSquareMapper _squareMapper = const GridSquareMapper();
@@ -76,6 +76,11 @@ class _ScanPageState extends State<ScanPage> {
   _ScanCaptureDomain _selectedCaptureDomain = _ScanCaptureDomain.screen;
   bool _selectedImageHasExif = false;
   bool _selectedImageLooksScreenshot = false;
+  final Map<String, int> _gateDecisionCounters = <String, int>{
+    'strong_reject': 0,
+    'gray': 0,
+    'strong_accept': 0,
+  };
 
   @override
   void initState() {
@@ -179,6 +184,7 @@ class _ScanPageState extends State<ScanPage> {
       setState(() {
         _scanResult = result;
         _editablePosition = result.detectedPosition;
+        _recordGateDecision(result.detectorDebug);
         _refreshFenAndValidation();
       });
     } catch (e) {
@@ -238,6 +244,35 @@ class _ScanPageState extends State<ScanPage> {
       return 'unknown';
     }
     return source == ImageSource.camera ? 'camera' : 'gallery';
+  }
+
+  String _gateDecisionBucket(String detectorDebug) {
+    if (detectorDebug.contains('decision=reject_strong_no_board')) {
+      return 'strong_reject';
+    }
+    if (detectorDebug.contains('decision=allow_strong_accept')) {
+      return 'strong_accept';
+    }
+    if (detectorDebug.contains('decision=allow_gray_zone_fallback')) {
+      return 'gray';
+    }
+    return 'gray';
+  }
+
+  void _recordGateDecision(String detectorDebug) {
+    final bucket = _gateDecisionBucket(detectorDebug);
+    _gateDecisionCounters[bucket] = (_gateDecisionCounters[bucket] ?? 0) + 1;
+    final rejectCount = _gateDecisionCounters['strong_reject'] ?? 0;
+    final grayCount = _gateDecisionCounters['gray'] ?? 0;
+    final acceptCount = _gateDecisionCounters['strong_accept'] ?? 0;
+    debugPrint(
+      '[gate-metrics] reject=' +
+          rejectCount.toString() +
+          ' gray=' +
+          grayCount.toString() +
+          ' accept=' +
+          acceptCount.toString(),
+    );
   }
 
   bool _looksLikeScreenshotPath(String path) {
@@ -1043,6 +1078,17 @@ class _ScanPageState extends State<ScanPage> {
                       style: TextStyle(
                         fontSize: 12,
                         color: Colors.white.withValues(alpha: 0.75),
+                      ),
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      'Gate counters: '
+                      'reject=${_gateDecisionCounters['strong_reject'] ?? 0} '
+                      'gray=${_gateDecisionCounters['gray'] ?? 0} '
+                      'accept=${_gateDecisionCounters['strong_accept'] ?? 0}',
+                      style: TextStyle(
+                        fontSize: 11,
+                        color: Colors.white.withValues(alpha: 0.70),
                       ),
                     ),
                   ],
