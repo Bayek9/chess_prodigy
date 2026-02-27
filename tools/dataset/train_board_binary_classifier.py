@@ -69,7 +69,9 @@ def parse_args() -> argparse.Namespace:
         action="append",
         default=None,
         help=(
-            "Root dataset dir containing board/ and no_board/ subdirs. "
+            "Dataset dir(s). Supports: "
+            "(a) root dirs containing board/ and/or no_board/ subdirs, "
+            "(b) direct class dirs like no_board_screen/ (negative-only). "
             "Can be passed multiple times."
         ),
     )
@@ -145,9 +147,24 @@ def list_images(root: Path) -> list[Path]:
     return out
 
 
+def infer_direct_class_label(root: Path) -> int | None:
+    name = root.name.lower()
+    if name == "board":
+        return CLASS_TO_INDEX["board"]
+    if name == "no_board" or name.startswith("no_board_"):
+        return CLASS_TO_INDEX["no_board"]
+    return None
+
+
 def collect_samples(data_roots: list[Path]) -> list[Sample]:
     samples: list[Sample] = []
     for root in data_roots:
+        direct_label = infer_direct_class_label(root)
+        if direct_label is not None:
+            for path in list_images(root):
+                samples.append(Sample(path=str(path), label=direct_label))
+            continue
+
         for class_name, label in CLASS_TO_INDEX.items():
             class_dir = root / class_name
             if not class_dir.exists():
@@ -605,3 +622,5 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+
+

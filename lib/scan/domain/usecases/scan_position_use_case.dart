@@ -51,8 +51,8 @@ class ScanPositionUseCase {
     required PositionValidator validator,
     required FenBuilder fenBuilder,
     BoardPresenceClassifier? boardPresenceClassifier,
-    double boardPresenceThreshold = 0.90,
-    double boardPresenceRejectThreshold = 0.15,
+    double boardPresenceThreshold = 0.89,
+    double boardPresenceRejectThreshold = 0.60,
   }) : _detector = detector,
        _rectifier = rectifier,
        _classifier = classifier,
@@ -77,23 +77,32 @@ class ScanPositionUseCase {
     if (boardPresenceClassifier != null) {
       final prediction = await boardPresenceClassifier.predict(image);
       if (prediction.isAvailable) {
+        final acceptThreshold = _boardPresenceThreshold.clamp(0.0, 1.0);
         final rejectThreshold = _boardPresenceRejectThreshold.clamp(
           0.0,
-          _boardPresenceThreshold,
+          acceptThreshold,
         );
-        final probability = prediction.probability;
-        final isHighConfidenceBoard = probability >= _boardPresenceThreshold;
-        final isStrongNoBoard = probability < rejectThreshold;
-        final allowed = isHighConfidenceBoard || !isStrongNoBoard;
-        final decision = isHighConfidenceBoard
-            ? 'allow_high_confidence_board'
-            : isStrongNoBoard
+        final strongProbability = prediction.probability.clamp(0.0, 1.0);
+        final fallbackProbability = prediction.fallbackOrProbability.clamp(
+          0.0,
+          1.0,
+        );
+
+        final isStrongAccept = strongProbability >= acceptThreshold;
+        final isStrongReject = fallbackProbability < rejectThreshold;
+
+        final allowed = !isStrongReject;
+        final decision = isStrongAccept
+            ? 'allow_strong_accept'
+            : isStrongReject
             ? 'reject_strong_no_board'
             : 'allow_gray_zone_fallback';
+
         gateDebug =
             'gate=${prediction.source} '
-            'prob=${prediction.probability.toStringAsFixed(3)} '
-            'threshold=${_boardPresenceThreshold.toStringAsFixed(3)} '
+            'strong_prob=${strongProbability.toStringAsFixed(3)} '
+            'fallback_prob=${fallbackProbability.toStringAsFixed(3)} '
+            'accept_threshold=${acceptThreshold.toStringAsFixed(3)} '
             'reject_threshold=${rejectThreshold.toStringAsFixed(3)} '
             'decision=$decision '
             'allowed=$allowed';

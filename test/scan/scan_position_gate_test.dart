@@ -21,13 +21,14 @@ void main() {
     );
 
     test(
-      'rejects detector when probability is below reject threshold',
+      'rejects detector when fallback score is below reject threshold',
       () async {
         final detector = _FakeBoardDetector(validGeometry: true);
         final useCase = _buildUseCase(
           detector: detector,
           prediction: const BoardPresencePrediction.available(
             probability: 0.10,
+            fallbackProbability: 0.10,
             source: 'fake_gate',
           ),
         );
@@ -50,6 +51,7 @@ void main() {
         detector: detector,
         prediction: const BoardPresencePrediction.available(
           probability: 0.50,
+          fallbackProbability: 0.50,
           source: 'fake_gate',
         ),
       );
@@ -64,12 +66,39 @@ void main() {
       );
     });
 
-    test('accepts high confidence board probability', () async {
+    test(
+      'uses fallback probability for reject while strong score stays conservative',
+      () async {
+        final detector = _FakeBoardDetector(validGeometry: true);
+        final useCase = _buildUseCase(
+          detector: detector,
+          prediction: const BoardPresencePrediction.available(
+            probability: 0.40,
+            fallbackProbability: 0.80,
+            source: 'fake_gate',
+          ),
+        );
+
+        final result = await useCase.execute(image);
+
+        expect(detector.calls, 1);
+        expect(result.boardDetected, isTrue);
+        expect(result.detectorDebug, contains('strong_prob=0.400'));
+        expect(result.detectorDebug, contains('fallback_prob=0.800'));
+        expect(
+          result.detectorDebug,
+          contains('decision=allow_gray_zone_fallback'),
+        );
+      },
+    );
+
+    test('accepts strong board probability', () async {
       final detector = _FakeBoardDetector(validGeometry: true);
       final useCase = _buildUseCase(
         detector: detector,
         prediction: const BoardPresencePrediction.available(
           probability: 0.95,
+          fallbackProbability: 0.98,
           source: 'fake_gate',
         ),
       );
@@ -78,10 +107,7 @@ void main() {
 
       expect(detector.calls, 1);
       expect(result.boardDetected, isTrue);
-      expect(
-        result.detectorDebug,
-        contains('decision=allow_high_confidence_board'),
-      );
+      expect(result.detectorDebug, contains('decision=allow_strong_accept'));
     });
   });
 }

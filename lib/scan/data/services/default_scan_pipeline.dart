@@ -13,11 +13,13 @@ class DefaultScanPipelineFactory {
   const DefaultScanPipelineFactory._();
 
   static const bool _defaultUseOpenCvDetector = true;
-  static const double _defaultBoardPresenceThreshold = 0.90;
-  static const double _defaultBoardPresenceRejectThreshold = 0.15;
+  static const double _defaultBoardPresenceThreshold = 0.89;
+  static const double _defaultBoardPresenceRejectThreshold = 0.60;
+  static const String _defaultBoardPresenceModelAssetPath =
+      'assets/scan_models/board_binary.tflite';
 
-  static final TfliteBoardPresenceClassifier _sharedBoardPresenceClassifier =
-      TfliteBoardPresenceClassifier();
+  static final Map<String, TfliteBoardPresenceClassifier>
+  _boardPresenceClassifiersByAsset = <String, TfliteBoardPresenceClassifier>{};
 
   static ScanPositionUseCase create({
     PositionValidator? validator,
@@ -25,10 +27,20 @@ class DefaultScanPipelineFactory {
     bool useOpenCvDetector = _defaultUseOpenCvDetector,
     bool lowLatencyDetector = false,
     bool useBoardPresenceGate = true,
+    String boardPresenceModelAssetPath = _defaultBoardPresenceModelAssetPath,
     double boardPresenceThreshold = _defaultBoardPresenceThreshold,
     double boardPresenceRejectThreshold = _defaultBoardPresenceRejectThreshold,
   }) {
     final fallbackDetector = const StatisticalBoardDetector();
+    final boardPresenceClassifier = useBoardPresenceGate
+        ? _boardPresenceClassifiersByAsset.putIfAbsent(
+            boardPresenceModelAssetPath,
+            () => TfliteBoardPresenceClassifier(
+              modelAssetPath: boardPresenceModelAssetPath,
+            ),
+          )
+        : null;
+
     return ScanPositionUseCase(
       detector: useOpenCvDetector
           ? OpenCvHybridBoardDetector(
@@ -43,9 +55,7 @@ class DefaultScanPipelineFactory {
       classifier: const MockPieceClassifier(),
       validator: validator ?? const BasicPositionValidator(),
       fenBuilder: fenBuilder ?? const BasicFenBuilder(),
-      boardPresenceClassifier: useBoardPresenceGate
-          ? _sharedBoardPresenceClassifier
-          : null,
+      boardPresenceClassifier: boardPresenceClassifier,
       boardPresenceThreshold: boardPresenceThreshold,
       boardPresenceRejectThreshold: boardPresenceRejectThreshold,
     );

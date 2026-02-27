@@ -21,6 +21,8 @@ import '../domain/usecases/scan_position_use_case.dart';
 import 'widgets/board_correction_editor.dart';
 import 'widgets/piece_chooser_sheet.dart';
 
+enum _ScanCaptureDomain { photoReal, screen }
+
 class ScanPage extends StatefulWidget {
   const ScanPage({super.key, required this.onAnalyzeFen});
 
@@ -32,12 +34,21 @@ class ScanPage extends StatefulWidget {
 
 class _ScanPageState extends State<ScanPage> {
   static const String _scanCoreRevision = 'scan-core-r2026-02-27-01';
+  static const double _photoRealAcceptThreshold = 0.89;
+  static const double _photoRealRejectThreshold = 0.60;
+  static const double _screenAcceptThreshold = 0.89;
+  static const double _screenRejectThreshold = 0.60;
+  static const String _photoRealBoardModelAssetPath =
+      'assets/scan_models/board_binary.tflite';
+  static const String _screenBoardModelAssetPath =
+      'assets/scan_models/board_binary.tflite';
 
   final ImagePicker _picker = ImagePicker();
   final GridSquareMapper _squareMapper = const GridSquareMapper();
   final FenBuilder _fenBuilder = const BasicFenBuilder();
   final PositionValidator _validator = const BasicPositionValidator();
-  late final ScanPositionUseCase _scanUseCase;
+  late final ScanPositionUseCase _scanUseCasePhotoReal;
+  late final ScanPositionUseCase _scanUseCaseScreen;
   late final ScanPositionUseCase _datasetScanUseCase;
   late final ScanPositionUseCase _datasetScanUseCaseFast;
   late final RunScanDatasetValidationUseCase _datasetValidationUseCase;
@@ -61,14 +72,29 @@ class _ScanPageState extends State<ScanPage> {
   Size? _selectedImageSize;
   Object? _selectedImageSizeToken;
   List<BoardCorner> _manualCorners = const <BoardCorner>[];
+  ImageSource? _selectedImageSource;
+  _ScanCaptureDomain _selectedCaptureDomain = _ScanCaptureDomain.screen;
+  bool _selectedImageHasExif = false;
+  bool _selectedImageLooksScreenshot = false;
 
   @override
   void initState() {
     super.initState();
-    _scanUseCase = DefaultScanPipelineFactory.create(
+    _scanUseCasePhotoReal = DefaultScanPipelineFactory.create(
       validator: _validator,
       fenBuilder: _fenBuilder,
       useBoardPresenceGate: true,
+      boardPresenceThreshold: _photoRealAcceptThreshold,
+      boardPresenceRejectThreshold: _photoRealRejectThreshold,
+      boardPresenceModelAssetPath: _photoRealBoardModelAssetPath,
+    );
+    _scanUseCaseScreen = DefaultScanPipelineFactory.create(
+      validator: _validator,
+      fenBuilder: _fenBuilder,
+      useBoardPresenceGate: true,
+      boardPresenceThreshold: _screenAcceptThreshold,
+      boardPresenceRejectThreshold: _screenRejectThreshold,
+      boardPresenceModelAssetPath: _screenBoardModelAssetPath,
     );
     _datasetScanUseCase = DefaultScanPipelineFactory.create(
       validator: _validator,
@@ -101,11 +127,22 @@ class _ScanPageState extends State<ScanPage> {
         return;
       }
       final bytes = await file.readAsBytes();
+      final hasExif = _hasExifMetadata(bytes);
+      final looksScreenshot = _looksLikeScreenshotPath(file.path);
+      final captureDomain = _resolveCaptureDomain(
+        source: source,
+        hasExif: hasExif,
+        looksScreenshot: looksScreenshot,
+      );
       if (!mounted) {
         return;
       }
       setState(() {
         _selectedImage = ScanInputImage(path: file.path, bytes: bytes);
+        _selectedImageSource = source;
+        _selectedCaptureDomain = captureDomain;
+        _selectedImageHasExif = hasExif;
+        _selectedImageLooksScreenshot = looksScreenshot;
         _scanResult = null;
         _editablePosition = null;
         _finalFen = null;
@@ -132,9 +169,10 @@ class _ScanPageState extends State<ScanPage> {
       _isScanning = true;
       _errorMessage = null;
     });
+    final scanUseCase = _scanUseCaseForDomain(_selectedCaptureDomain);
 
     try {
-      final result = await _scanUseCase.execute(image);
+      final result = await scanUseCase.execute(image);
       if (!mounted) {
         return;
       }
@@ -153,6 +191,151 @@ class _ScanPageState extends State<ScanPage> {
         setState(() => _isScanning = false);
       }
     }
+  }
+
+  ScanPositionUseCase _scanUseCaseForDomain(_ScanCaptureDomain domain) {
+    switch (domain) {
+      case _ScanCaptureDomain.photoReal:
+        return _scanUseCasePhotoReal;
+      case _ScanCaptureDomain.screen:
+        return _scanUseCaseScreen;
+    }
+  }
+
+  _ScanCaptureDomain _resolveCaptureDomain({
+    required ImageSource? source,
+    required bool hasExif,
+    required bool looksScreenshot,
+  }) {
+    if (source == ImageSource.camera) {
+      return _ScanCaptureDomain.photoReal;
+    }
+    if (source == ImageSource.gallery) {
+      if (looksScreenshot || !hasExif) {
+        return _ScanCaptureDomain.screen;
+      }
+      return _ScanCaptureDomain.screen;
+    }
+    if (looksScreenshot || !hasExif) {
+      return _ScanCaptureDomain.screen;
+    }
+    return _ScanCaptureDomain.photoReal;
+  }
+
+  String _captureDomainLabel(_ScanCaptureDomain domain) {
+    return domain == _ScanCaptureDomain.photoReal ? 'photo_real' : 'screen';
+  }
+
+  String _selectedImageSourceLabel() {
+    final source = _selectedImageSource;
+    if (source == null) {
+      return 'unknown';
+    }
+    return source == ImageSource.camera ? 'camera' : 'gallery';
+  }
+
+  bool _looksLikeScreenshotPath(String path) {
+    final lower = path.toLowerCase();
+    return lower.contains('screenshot') ||
+        lower.contains('screen_shot') ||
+        lower.contains('screen-shot') ||
+        lower.contains('/screenshots/') ||
+        lower.contains('\\screenshots\\') ||
+        lower.contains('capture');
+  }
+
+  bool _hasExifMetadata(Uint8List bytes) {
+    return _hasJpegExif(bytes) || _hasPngExif(bytes);
+  }
+
+  bool _hasJpegExif(Uint8List bytes) {
+    if (bytes.length < 4) {
+      return false;
+    }
+    if (bytes[0] != 0xFF || bytes[1] != 0xD8) {
+      return false;
+    }
+
+    var offset = 2;
+    while (offset + 4 <= bytes.length) {
+      if (bytes[offset] != 0xFF) {
+        offset += 1;
+        continue;
+      }
+
+      final marker = bytes[offset + 1];
+      if (marker == 0xD9 || marker == 0xDA) {
+        break;
+      }
+      final segmentLength = (bytes[offset + 2] << 8) | bytes[offset + 3];
+      if (segmentLength < 2) {
+        break;
+      }
+
+      final nextOffset = offset + 2 + segmentLength;
+      if (nextOffset > bytes.length) {
+        break;
+      }
+
+      if (marker == 0xE1) {
+        final header = offset + 4;
+        if (header + 6 <= bytes.length &&
+            bytes[header] == 0x45 &&
+            bytes[header + 1] == 0x78 &&
+            bytes[header + 2] == 0x69 &&
+            bytes[header + 3] == 0x66 &&
+            bytes[header + 4] == 0x00 &&
+            bytes[header + 5] == 0x00) {
+          return true;
+        }
+      }
+
+      offset = nextOffset;
+    }
+
+    return false;
+  }
+
+  bool _hasPngExif(Uint8List bytes) {
+    if (bytes.length < 8) {
+      return false;
+    }
+    const signature = <int>[0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A];
+    for (var i = 0; i < signature.length; i++) {
+      if (bytes[i] != signature[i]) {
+        return false;
+      }
+    }
+
+    var offset = 8;
+    while (offset + 12 <= bytes.length) {
+      final length =
+          (bytes[offset] << 24) |
+          (bytes[offset + 1] << 16) |
+          (bytes[offset + 2] << 8) |
+          bytes[offset + 3];
+      if (length < 0) {
+        return false;
+      }
+
+      final nextOffset = offset + 12 + length;
+      if (nextOffset > bytes.length) {
+        return false;
+      }
+
+      final isExifChunk =
+          bytes[offset + 4] == 0x65 &&
+          bytes[offset + 5] == 0x58 &&
+          bytes[offset + 6] == 0x49 &&
+          bytes[offset + 7] == 0x66;
+      if (isExifChunk) {
+        return true;
+      }
+
+      offset = nextOffset;
+    }
+
+    return false;
   }
 
   Future<void> _editSquare(String square) async {
@@ -330,8 +513,23 @@ class _ScanPageState extends State<ScanPage> {
       return;
     }
     final image = evaluation.sourceImage;
+    final inferredHasExif = image == null
+        ? false
+        : _hasExifMetadata(image.bytes);
+    final inferredLooksScreenshot = image == null
+        ? false
+        : _looksLikeScreenshotPath(image.path);
+
     setState(() {
       _selectedImage = image;
+      _selectedImageSource = null;
+      _selectedCaptureDomain = _resolveCaptureDomain(
+        source: null,
+        hasExif: inferredHasExif,
+        looksScreenshot: inferredLooksScreenshot,
+      );
+      _selectedImageHasExif = inferredHasExif;
+      _selectedImageLooksScreenshot = inferredLooksScreenshot;
       _scanResult = evaluation.result;
       _editablePosition = evaluation.result?.detectedPosition;
       _selectedImageSize = null;
@@ -829,6 +1027,19 @@ class _ScanPageState extends State<ScanPage> {
                       ),
                     ),
                   ],
+                  if (_selectedImage != null) ...[
+                    const SizedBox(height: 8),
+                    Text(
+                      'Routing: ${_captureDomainLabel(_selectedCaptureDomain)} '
+                      '(source=${_selectedImageSourceLabel()}, '
+                      'screenshot_hint=${_selectedImageLooksScreenshot ? "yes" : "no"}, '
+                      'exif=${_selectedImageHasExif ? "present" : "absent"})',
+                      style: TextStyle(
+                        fontSize: 12,
+                        color: Colors.white.withValues(alpha: 0.75),
+                      ),
+                    ),
+                  ],
                 ],
               ),
             ),
@@ -1045,7 +1256,8 @@ class _ScanPageState extends State<ScanPage> {
               const SizedBox(height: 12),
               _SectionCard(
                 title: 'Source preview',
-                subtitle: _selectedImage?.path,
+                subtitle:
+                    '${_selectedImage?.path}\nDomain: ${_captureDomainLabel(_selectedCaptureDomain)}',
                 child: _ImagePreview(bytes: imageBytes),
               ),
             ],
@@ -1419,5 +1631,3 @@ class _ImagePreview extends StatelessWidget {
     );
   }
 }
-
-

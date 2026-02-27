@@ -52,8 +52,7 @@ class TfliteBoardPresenceClassifier implements BoardPresenceClassifier {
         );
       }
 
-      var maxProbability = 0.0;
-      var sumProbability = 0.0;
+      final probabilities = <double>[];
       for (final crop in crops) {
         final input = _cropToInputTensor(
           decoded: decoded,
@@ -68,17 +67,31 @@ class TfliteBoardPresenceClassifier implements BoardPresenceClassifier {
         interpreter.run(input, output);
         final raw = output.first.first;
         final probability = raw.isNaN ? 0.0 : raw.clamp(0.0, 1.0).toDouble();
-        if (probability > maxProbability) {
-          maxProbability = probability;
-        }
-        sumProbability += probability;
+        probabilities.add(probability);
       }
 
-      final meanProbability = sumProbability / crops.length;
+      if (probabilities.isEmpty) {
+        return BoardPresencePrediction.unavailable(
+          source: 'tflite',
+          error: 'empty_predictions',
+        );
+      }
+
+      final sorted = List<double>.from(probabilities)..sort();
+      final maxProbability = sorted.last;
+      final topCount = sorted.length >= 2 ? 2 : 1;
+      final topK = sorted.sublist(sorted.length - topCount);
+      final strongProbability =
+          topK.reduce((a, b) => a + b) / topK.length.toDouble();
+      final meanProbability =
+          probabilities.reduce((a, b) => a + b) /
+          probabilities.length.toDouble();
+
       return BoardPresencePrediction.available(
-        probability: maxProbability,
+        probability: strongProbability,
+        fallbackProbability: maxProbability,
         source:
-            'tflite_multi_crop${crops.length}_max(mean=${meanProbability.toStringAsFixed(3)})',
+            'tflite_multi_crop${crops.length}_top2mean(max=${maxProbability.toStringAsFixed(3)},mean=${meanProbability.toStringAsFixed(3)})',
       );
     } catch (e) {
       return BoardPresencePrediction.unavailable(

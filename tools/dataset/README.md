@@ -174,9 +174,12 @@ Notes:
 
 
 
-## 5.1) Calibrate operating threshold (important)
+## 5.1) Calibrate hysteresis thresholds (important)
 
-After training, calibrate threshold on real data mix:
+After training, calibrate on the real data mix with a strict split:
+
+- `val`: threshold search/calibration
+- `test`: final reporting only (no threshold selection on test)
 
 ```powershell
 python tools/dataset/calibrate_board_threshold.py `
@@ -184,10 +187,75 @@ python tools/dataset/calibrate_board_threshold.py `
   --data-dir datasets/real_scan/board_binary_domain/photo_real `
   --data-dir datasets/external/board_binary_real `
   --data-dir datasets/external/board_binary_no_board `
+  --val-split 0.2 `
+  --test-split 0.2 `
+  --reject-board-weight 0.75 `
+  --reject-no-board-weight 0.25 `
+  --accept-board-weight 0.30 `
+  --accept-no-board-weight 0.70 `
+  --hysteresis-min-gap 0.05 `
   --output-json models/board_binary/threshold_calibration.json
 ```
 
-Use `recommended_threshold` from the JSON in Flutter (`boardPresenceThreshold`).
+Optional hard-negative export (opt-in, quota-limited):
+
+```powershell
+python tools/dataset/calibrate_board_threshold.py `
+  --model-path models/board_binary/board_binary.keras `
+  --data-dir datasets/real_scan/board_binary_domain/photo_real `
+  --data-dir datasets/external/board_binary_real `
+  --data-dir datasets/external/board_binary_no_board `
+  --hard-negatives-dir datasets/real_scan/hard_examples `
+  --max-hard-fp 120 `
+  --max-hard-fn 120 `
+  --hard-copy-stride 2 `
+  --hard-purge-existing
+```
+
+Use from JSON in Flutter:
+
+- `recommended_accept_threshold` -> `boardPresenceThreshold`
+- `recommended_reject_threshold` -> `boardPresenceRejectThreshold`
+
+The script calibrates with the same classifier logic as the app gate:
+5 crops, `strong=top2_mean`, `fallback=max`.
+
+## 5.2) Screen-domain calibration (no source leakage)
+
+For 2D screen routing (`screenshot` / `photo_screen`), do not use real-world negatives
+(e.g. `datasets/external/board_binary_no_board`) during calibration.
+Use same-domain negatives only.
+
+Create a dedicated negative folder:
+
+```powershell
+New-Item -ItemType Directory -Force datasets/real_scan/board_binary/no_board_screen | Out-Null
+```
+
+Then add screenshots of non-chess UI (apps, web pages, settings, chat, gallery) into:
+`datasets/real_scan/board_binary/no_board_screen/`
+
+Train/calibrate screen domain only:
+
+```powershell
+python tools/dataset/train_board_binary_classifier.py `
+  --data-dir datasets/real_scan/board_binary_domain/photo_screen `
+  --data-dir datasets/real_scan/board_binary_domain/screenshot `
+  --data-dir datasets/real_scan/board_binary/no_board_screen `
+  --output-dir models/board_binary_screen
+
+python tools/dataset/calibrate_board_threshold.py `
+  --model-path models/board_binary_screen/board_binary.keras `
+  --data-dir datasets/real_scan/board_binary_domain/photo_screen `
+  --data-dir datasets/real_scan/board_binary_domain/screenshot `
+  --data-dir datasets/real_scan/board_binary/no_board_screen `
+  --val-split 0.2 `
+  --test-split 0.2 `
+  --output-json models/board_binary_screen/threshold_calibration_screen.json
+```
+
+`train_board_binary_classifier.py` and `calibrate_board_threshold.py` now accept direct
+class directories like `no_board_screen/` as negative-only inputs.
 
 ## 6) Increase no_board / board counts quickly
 
@@ -227,3 +295,5 @@ Then run:
 ```powershell
 flutter pub get
 ```
+
+
