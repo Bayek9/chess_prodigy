@@ -7,17 +7,26 @@ import 'basic_fen_builder.dart';
 import 'basic_position_validator.dart';
 import 'opencv_hybrid_board_detector.dart';
 import 'statistical_board_detector.dart';
+import 'tflite_board_presence_classifier.dart';
 
 class DefaultScanPipelineFactory {
   const DefaultScanPipelineFactory._();
 
   static const bool _defaultUseOpenCvDetector = true;
+  static const double _defaultBoardPresenceThreshold = 0.90;
+  static const double _defaultBoardPresenceRejectThreshold = 0.15;
+
+  static final TfliteBoardPresenceClassifier _sharedBoardPresenceClassifier =
+      TfliteBoardPresenceClassifier();
 
   static ScanPositionUseCase create({
     PositionValidator? validator,
     FenBuilder? fenBuilder,
     bool useOpenCvDetector = _defaultUseOpenCvDetector,
     bool lowLatencyDetector = false,
+    bool useBoardPresenceGate = true,
+    double boardPresenceThreshold = _defaultBoardPresenceThreshold,
+    double boardPresenceRejectThreshold = _defaultBoardPresenceRejectThreshold,
   }) {
     final fallbackDetector = const StatisticalBoardDetector();
     return ScanPositionUseCase(
@@ -34,6 +43,11 @@ class DefaultScanPipelineFactory {
       classifier: const MockPieceClassifier(),
       validator: validator ?? const BasicPositionValidator(),
       fenBuilder: fenBuilder ?? const BasicFenBuilder(),
+      boardPresenceClassifier: useBoardPresenceGate
+          ? _sharedBoardPresenceClassifier
+          : null,
+      boardPresenceThreshold: boardPresenceThreshold,
+      boardPresenceRejectThreshold: boardPresenceRejectThreshold,
     );
   }
 }

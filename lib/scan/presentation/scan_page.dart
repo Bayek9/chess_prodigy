@@ -31,7 +31,7 @@ class ScanPage extends StatefulWidget {
 }
 
 class _ScanPageState extends State<ScanPage> {
-  static const String _scanCoreRevision = 'scan-core-r2026-02-25-15';
+  static const String _scanCoreRevision = 'scan-core-r2026-02-27-01';
 
   final ImagePicker _picker = ImagePicker();
   final GridSquareMapper _squareMapper = const GridSquareMapper();
@@ -68,24 +68,29 @@ class _ScanPageState extends State<ScanPage> {
     _scanUseCase = DefaultScanPipelineFactory.create(
       validator: _validator,
       fenBuilder: _fenBuilder,
+      useBoardPresenceGate: true,
     );
     _datasetScanUseCase = DefaultScanPipelineFactory.create(
       validator: _validator,
       fenBuilder: _fenBuilder,
       lowLatencyDetector: false,
+      useBoardPresenceGate: true,
     );
     _datasetScanUseCaseFast = DefaultScanPipelineFactory.create(
       validator: _validator,
       fenBuilder: _fenBuilder,
       lowLatencyDetector: true,
+      useBoardPresenceGate: true,
     );
     _datasetValidationUseCase = RunScanDatasetValidationUseCase(
       scanPipeline: _datasetScanUseCase,
       datasetLoader: const AssetScanValidationDatasetLoader(),
+      compareFen: false,
     );
     _datasetValidationUseCaseFast = RunScanDatasetValidationUseCase(
       scanPipeline: _datasetScanUseCaseFast,
       datasetLoader: const AssetScanValidationDatasetLoader(),
+      compareFen: false,
     );
   }
 
@@ -1056,7 +1061,7 @@ class _ScanPageState extends State<ScanPage> {
               _SectionCard(
                 title: 'Detected board',
                 subtitle:
-                    'Corners: ${_scanResult!.geometry.corners.length}/4 (statistical detector, no OpenCV)',
+                    'Corners: ${_scanResult!.geometry.corners.length}/4 (OpenCV hybrid detector)',
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
@@ -1414,3 +1419,5 @@ class _ImagePreview extends StatelessWidget {
     );
   }
 }
+
+

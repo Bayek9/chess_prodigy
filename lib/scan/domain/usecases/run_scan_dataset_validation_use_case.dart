@@ -166,6 +166,7 @@ class RunScanDatasetValidationUseCase {
   RunScanDatasetValidationUseCase({
     required ScanPositionUseCase scanPipeline,
     required ScanValidationDatasetLoader datasetLoader,
+    this.compareFen = true,
     this.cornerTolerance = 20.0,
     this.cornerMeanPercentTolerance = 10.0,
     this.cornerMaxPercentTolerance = 16.0,
@@ -177,6 +178,7 @@ class RunScanDatasetValidationUseCase {
 
   final ScanPositionUseCase _scanPipeline;
   final ScanValidationDatasetLoader _datasetLoader;
+  final bool compareFen;
   final double cornerTolerance;
   final double cornerMeanPercentTolerance;
   final double cornerMaxPercentTolerance;
@@ -305,7 +307,7 @@ class RunScanDatasetValidationUseCase {
       );
     }
 
-    if (expected.fen != null) {
+    if (compareFen && expected.fen != null) {
       fields.add(
         ScanFieldComparison(
           field: 'fen',
@@ -449,3 +451,5 @@ class _CompareResult {
   final List<ScanFieldComparison> comparisons;
   final CornerErrorMetrics? cornerErrorMetrics;
 }
+
+

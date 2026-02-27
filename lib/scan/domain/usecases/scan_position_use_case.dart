@@ -6,6 +6,7 @@ import '../entities/scan_debug_trace.dart';
 import '../entities/scan_image.dart';
 import '../entities/scan_piece.dart';
 import '../services/board_detector.dart';
+import '../services/board_presence_classifier.dart';
 import '../services/board_rectifier.dart';
 import '../services/fen_builder.dart';
 import '../services/piece_classifier.dart';
@@ -49,21 +50,72 @@ class ScanPositionUseCase {
     required PieceClassifier classifier,
     required PositionValidator validator,
     required FenBuilder fenBuilder,
+    BoardPresenceClassifier? boardPresenceClassifier,
+    double boardPresenceThreshold = 0.90,
+    double boardPresenceRejectThreshold = 0.15,
   }) : _detector = detector,
        _rectifier = rectifier,
        _classifier = classifier,
        _validator = validator,
-       _fenBuilder = fenBuilder;
+       _fenBuilder = fenBuilder,
+       _boardPresenceClassifier = boardPresenceClassifier,
+       _boardPresenceThreshold = boardPresenceThreshold,
+       _boardPresenceRejectThreshold = boardPresenceRejectThreshold;
 
   final BoardDetector _detector;
   final BoardRectifier _rectifier;
   final PieceClassifier _classifier;
   final PositionValidator _validator;
   final FenBuilder _fenBuilder;
+  final BoardPresenceClassifier? _boardPresenceClassifier;
+  final double _boardPresenceThreshold;
+  final double _boardPresenceRejectThreshold;
 
   Future<ScanPipelineResult> execute(ScanInputImage image) async {
+    var gateDebug = 'gate=disabled';
+    final boardPresenceClassifier = _boardPresenceClassifier;
+    if (boardPresenceClassifier != null) {
+      final prediction = await boardPresenceClassifier.predict(image);
+      if (prediction.isAvailable) {
+        final rejectThreshold = _boardPresenceRejectThreshold.clamp(
+          0.0,
+          _boardPresenceThreshold,
+        );
+        final probability = prediction.probability;
+        final isHighConfidenceBoard = probability >= _boardPresenceThreshold;
+        final isStrongNoBoard = probability < rejectThreshold;
+        final allowed = isHighConfidenceBoard || !isStrongNoBoard;
+        final decision = isHighConfidenceBoard
+            ? 'allow_high_confidence_board'
+            : isStrongNoBoard
+            ? 'reject_strong_no_board'
+            : 'allow_gray_zone_fallback';
+        gateDebug =
+            'gate=${prediction.source} '
+            'prob=${prediction.probability.toStringAsFixed(3)} '
+            'threshold=${_boardPresenceThreshold.toStringAsFixed(3)} '
+            'reject_threshold=${rejectThreshold.toStringAsFixed(3)} '
+            'decision=$decision '
+            'allowed=$allowed';
+        if (!allowed) {
+          return _emptyResult(
+            gateDebug: '$gateDebug detector=skipped',
+            debugLabel: 'rectify_skipped_gate_rejected',
+          );
+        }
+      } else {
+        final error = prediction.error == null
+            ? ''
+            : ' error=${prediction.error}';
+        gateDebug = 'gate=${prediction.source} unavailable$error';
+      }
+    }
+
     final geometry = await _detector.detect(image);
-    final detectorDebug = ScanDebugTrace.instance.consumeOrDefault();
+    final detectorDebugRaw = ScanDebugTrace.instance.consumeOrDefault();
+    final detectorDebug = detectorDebugRaw == '-'
+        ? gateDebug
+        : '$gateDebug $detectorDebugRaw';
     if (!geometry.isValid) {
       return ScanPipelineResult(
         geometry: geometry,
@@ -96,6 +148,25 @@ class ScanPositionUseCase {
       validation: validation,
       detectedFen: detectedFen,
       detectorDebug: detectorDebug,
+    );
+  }
+
+  ScanPipelineResult _emptyResult({
+    required String gateDebug,
+    required String debugLabel,
+  }) {
+    return ScanPipelineResult(
+      geometry: const BoardGeometry(corners: <BoardCorner>[]),
+      rectifiedBoard: RectifiedBoardImage(
+        bytes: Uint8List(0),
+        width: 0,
+        height: 0,
+        debugLabel: debugLabel,
+      ),
+      detectedPosition: BoardScanPosition(pieces: const <String, ScanPiece>{}),
+      validation: const PositionValidationResult(),
+      detectedFen: '',
+      detectorDebug: gateDebug,
     );
   }
 }

@@ -41,6 +41,7 @@ dependencies:
   colorful_iconify_flutter: ^0.0.5
   image_picker: ^1.2.1
   opencv_4: ^1.0.0
+  tflite_flutter: ^0.11.0
 
 dev_dependencies:
   flutter_test:
@@ -67,6 +68,7 @@ flutter:
   assets:
     - assets/scan_samples/
     - assets/scan_samples/images/
+    - assets/scan_models/
 
   # An image asset can refer to one or more resolution-specific "variants", see
   # https://flutter.dev/to/resolution-aware-images

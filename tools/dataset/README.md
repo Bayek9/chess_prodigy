@@ -97,10 +97,18 @@ python tools/dataset/extract_real_scan_dataset.py `
 Output:
 
 - `datasets/real_scan/board_binary/{board,no_board}/*`
+- `datasets/real_scan/board_binary_domain/{photo_real,photo_screen,screenshot,unknown}/{board,no_board}/*`
 - `datasets/real_scan/warped_boards/*.png` (for cases with corners)
 - `datasets/real_scan/piece_crops_real/{label}/*.png` only if `expected.fen` exists
 - `datasets/real_scan/labels/real_piece_samples.csv`
 - `datasets/real_scan/labels/real_extract_summary.json`
+
+Notes:
+
+- Domain separation is enabled by default (`--split-domains`).
+- You can override per-case domain in JSON with:
+  - `"capture_domain": "photo_real"` or `"photo_screen"` or `"screenshot"`.
+- This avoids mixing true board photos with screen photos during training.
 
 ## 4) Training strategy
 
@@ -108,3 +116,114 @@ Output:
 - Add real labeled crops when you have reliable FEN on real cases.
 - Keep validation/test sets fully real to measure true performance.
 - For board detection, use `board_binary` with your `no_board*` and `photo_demi_board*` negatives.
+- Do not mix 2D diagrams/screenshots with real-photo board detection data.
+  Keep them in separate folders and train separately.
+
+## 4.1) Strict import for board/no_board (no 2D mix)
+
+Use this helper to import external archives into a strict layout:
+
+- `datasets/external/board_binary_real/board` (real board photos only)
+- `datasets/external/board_binary_no_board/no_board` (negative images only)
+
+```powershell
+python tools/dataset/import_board_binary_archives.py `
+  --real-archive "C:\Users\samib\Downloads\archive.zip" `
+  --real-archive "C:\Users\samib\Downloads\Chess Pieces.v24-416x416_aug.coco.zip" `
+  --no-board-archive "C:\Users\samib\Downloads\val2017.zip" `
+  --output-root datasets/external `
+  --max-no-board-per-archive 2000
+```
+
+## 5) Train board/no-board and export TFLite
+
+Install training dependencies:
+
+```powershell
+pip install -r tools/dataset/requirements-train.txt
+```
+
+Train:
+
+```powershell
+python tools/dataset/train_board_binary_classifier.py `
+  --data-dir datasets/real_scan/board_binary_domain/photo_real `
+  --data-dir datasets/external/board_binary_real `
+  --data-dir datasets/external/board_binary_no_board `
+  --output-dir models/board_binary `
+  --image-size 192 `
+  --batch-size 32 `
+  --epochs 6 `
+  --val-split 0.2 `
+  --max-train-per-class 400 `
+  --max-val-per-class 100
+```
+
+Outputs:
+
+- `models/board_binary/best.keras`
+- `models/board_binary/board_binary.keras`
+- `models/board_binary/board_binary.tflite`
+- `models/board_binary/labels.txt`
+- `models/board_binary/metrics.json`
+
+Notes:
+
+- Current real set is small (27 images). Add more `no_board` and half-board negatives first.
+- You can pass multiple `--data-dir` arguments to merge datasets.
+
+
+
+## 5.1) Calibrate operating threshold (important)
+
+After training, calibrate threshold on real data mix:
+
+```powershell
+python tools/dataset/calibrate_board_threshold.py `
+  --model-path models/board_binary/board_binary.keras `
+  --data-dir datasets/real_scan/board_binary_domain/photo_real `
+  --data-dir datasets/external/board_binary_real `
+  --data-dir datasets/external/board_binary_no_board `
+  --output-json models/board_binary/threshold_calibration.json
+```
+
+Use `recommended_threshold` from the JSON in Flutter (`boardPresenceThreshold`).
+
+## 6) Increase no_board / board counts quickly
+
+Generate extra augmented negatives:
+
+```powershell
+python tools/dataset/augment_no_board_samples.py `
+  --input-dir datasets/real_scan/board_binary/no_board `
+  --output-dir datasets/real_scan/board_binary/no_board `
+  --target-count 120 `
+  --seed 42
+```
+
+Generate extra augmented positives:
+
+```powershell
+python tools/dataset/augment_no_board_samples.py `
+  --input-dir datasets/real_scan/board_binary/board `
+  --output-dir datasets/real_scan/board_binary/board `
+  --target-count 120 `
+  --prefix board_aug `
+  --seed 43
+```
+
+## 7) Ship the model into Flutter assets
+
+Copy trained model and labels into app assets:
+
+```powershell
+New-Item -ItemType Directory -Force assets/scan_models | Out-Null
+Copy-Item models/board_binary/board_binary.tflite assets/scan_models/board_binary.tflite -Force
+Copy-Item models/board_binary/labels.txt assets/scan_models/board_binary_labels.txt -Force
+```
+
+Then run:
+
+```powershell
+flutter pub get
+```

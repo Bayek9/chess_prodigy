@@ -44,6 +44,8 @@ PIECE_LABELS = [
     "bK",
 ]
 
+DOMAIN_VALUES = ("photo_real", "photo_screen", "screenshot", "unknown")
+
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
@@ -69,6 +71,15 @@ def parse_args() -> argparse.Namespace:
         type=int,
         default=512,
         help="Target size for board warp (square).",
+    )
+    parser.add_argument(
+        "--split-domains",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help=(
+            "Also copy board/no_board into domain-specific folders to avoid mixing "
+            "photo_real vs photo_screen vs screenshot."
+        ),
     )
     return parser.parse_args()
 
@@ -156,6 +167,57 @@ def resolve_path(repo_root: Path, maybe_relative: str) -> Path:
     return repo_root / path
 
 
+def normalize_capture_domain(raw: Any) -> str | None:
+    if not isinstance(raw, str):
+        return None
+    key = raw.strip().lower().replace("-", "_").replace(" ", "_")
+    aliases = {
+        "photo_real": "photo_real",
+        "real_photo": "photo_real",
+        "real_board": "photo_real",
+        "board_photo": "photo_real",
+        "photo_screen": "photo_screen",
+        "screen_photo": "photo_screen",
+        "photo_of_screen": "photo_screen",
+        "screen": "photo_screen",
+        "screenshot": "screenshot",
+        "unknown": "unknown",
+    }
+    return aliases.get(key)
+
+
+def infer_capture_domain(case_id: str, image_rel: str, case_type: Any, explicit_domain: Any) -> str:
+    domain = normalize_capture_domain(explicit_domain)
+    if domain in DOMAIN_VALUES:
+        return domain
+
+    type_key = str(case_type).strip().lower()
+    if type_key == "screenshot":
+        return "screenshot"
+
+    haystack = f"{case_id} {image_rel}".lower()
+    screen_keywords = (
+        "screen",
+        "ecran",
+        "monitor",
+        "display",
+        "laptop",
+        "phone",
+        "mobile",
+        "reddit",
+        "youtube",
+        "lichess",
+        "chess.com",
+    )
+    if any(word in haystack for word in screen_keywords):
+        return "photo_screen"
+
+    if type_key == "photo":
+        return "photo_real"
+
+    return "unknown"
+
+
 def main() -> None:
     args = parse_args()
     ensure_runtime_deps()
@@ -176,11 +238,14 @@ def main() -> None:
         raise SystemExit("Invalid dataset json: `cases` is missing or not a list.")
 
     board_binary_dir = output_dir / "board_binary"
+    board_binary_domain_dir = output_dir / "board_binary_domain"
     warped_dir = output_dir / "warped_boards"
     labels_dir = output_dir / "labels"
     real_piece_dir = output_dir / "piece_crops_real"
     for name in ("board", "no_board"):
         (board_binary_dir / name).mkdir(parents=True, exist_ok=True)
+        for domain in DOMAIN_VALUES:
+            (board_binary_domain_dir / domain / name).mkdir(parents=True, exist_ok=True)
     warped_dir.mkdir(parents=True, exist_ok=True)
     labels_dir.mkdir(parents=True, exist_ok=True)
     for label in PIECE_LABELS:
@@ -192,6 +257,9 @@ def main() -> None:
     counters = {
         "total_cases": len(cases),
         "copied_board_binary": 0,
+        "copied_board_binary_by_domain": {
+            domain: {"board": 0, "no_board": 0} for domain in DOMAIN_VALUES
+        },
         "warped_boards": 0,
         "real_piece_crops": 0,
         "cases_with_fen": 0,
@@ -219,6 +287,13 @@ def main() -> None:
             expected = case.get("expected", {})
             if not isinstance(image_rel, str):
                 continue
+            case_type = case.get("type")
+            capture_domain = infer_capture_domain(
+                case_id=case_id,
+                image_rel=image_rel,
+                case_type=case_type,
+                explicit_domain=case.get("capture_domain"),
+            )
 
             source_path = resolve_path(repo_root, image_rel)
             if not source_path.exists():
@@ -230,6 +305,15 @@ def main() -> None:
                 binary_cls = "board" if board_detected else "no_board"
                 dst = board_binary_dir / binary_cls / f"{case_id}{source_path.suffix.lower()}"
                 shutil.copy2(source_path, dst)
+                if args.split_domains:
+                    domain_dst = (
+                        board_binary_domain_dir
+                        / capture_domain
+                        / binary_cls
+                        / f"{case_id}{source_path.suffix.lower()}"
+                    )
+                    shutil.copy2(source_path, domain_dst)
+                    counters["copied_board_binary_by_domain"][capture_domain][binary_cls] += 1
                 counters["copied_board_binary"] += 1
 
             corners = parse_corners(expected.get("corners"))
@@ -277,6 +361,12 @@ def main() -> None:
 
     print(f"[real] dataset={dataset_path}")
     print(f"[real] copied_board_binary={counters['copied_board_binary']}")
+    if args.split_domains:
+        print("[real] copied_board_binary_by_domain:")
+        for domain in DOMAIN_VALUES:
+            board_n = counters["copied_board_binary_by_domain"][domain]["board"]
+            no_board_n = counters["copied_board_binary_by_domain"][domain]["no_board"]
+            print(f"[real]   {domain}: board={board_n} no_board={no_board_n}")
     print(f"[real] warped_boards={counters['warped_boards']}")
     print(f"[real] real_piece_crops={counters['real_piece_crops']}")
     print(f"[real] summary={summary_path}")
