@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'dart:ui' as ui;
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:image_picker/image_picker.dart';
@@ -41,6 +42,9 @@ class _ScanPageState extends State<ScanPage> {
   static const double _screenRejectThreshold = 0.41;
   static const double _screenOpenCvMinBoardConfidence = 0.38;
   static const double _screenOpenCvMinBoardConfidenceLineFallback = 0.42;
+  static const double _screenLooseRetryStrongProbability = 0.70;
+  static const double _screenLooseOpenCvMinBoardConfidence = 0.24;
+  static const double _screenLooseOpenCvMinBoardConfidenceLineFallback = 0.28;
   static const String _photoRealBoardModelAssetPath =
       'assets/scan_models/board_binary.tflite';
   static const String _screenBoardModelAssetPath =
@@ -52,6 +56,7 @@ class _ScanPageState extends State<ScanPage> {
   final PositionValidator _validator = const BasicPositionValidator();
   late final ScanPositionUseCase _scanUseCasePhotoReal;
   late final ScanPositionUseCase _scanUseCaseScreen;
+  late final ScanPositionUseCase _scanUseCaseScreenLoose;
   late final ScanPositionUseCase _datasetScanUseCase;
   late final ScanPositionUseCase _datasetScanUseCaseFast;
   late final RunScanDatasetValidationUseCase _datasetValidationUseCase;
@@ -88,7 +93,9 @@ class _ScanPageState extends State<ScanPage> {
   @override
   void initState() {
     super.initState();
-    debugPrint('[scan][tflite] runtime=${tfl.version}');
+    if (kDebugMode) {
+      debugPrint('[scan][tflite] runtime=${tfl.version}');
+    }
     _scanUseCasePhotoReal = DefaultScanPipelineFactory.create(
       validator: _validator,
       fenBuilder: _fenBuilder,
@@ -109,6 +116,18 @@ class _ScanPageState extends State<ScanPage> {
       openCvMinBoardConfidence: _screenOpenCvMinBoardConfidence,
       openCvMinBoardConfidenceLineFallback:
           _screenOpenCvMinBoardConfidenceLineFallback,
+    );
+    _scanUseCaseScreenLoose = DefaultScanPipelineFactory.create(
+      validator: _validator,
+      fenBuilder: _fenBuilder,
+      useBoardPresenceGate: true,
+      boardPresenceThreshold: _screenAcceptThreshold,
+      boardPresenceRejectThreshold: _screenRejectThreshold,
+      boardPresenceModelAssetPath: _screenBoardModelAssetPath,
+      useFallbackForReject: false,
+      openCvMinBoardConfidence: _screenLooseOpenCvMinBoardConfidence,
+      openCvMinBoardConfidenceLineFallback:
+          _screenLooseOpenCvMinBoardConfidenceLineFallback,
     );
     _datasetScanUseCase = DefaultScanPipelineFactory.create(
       validator: _validator,
@@ -183,10 +202,34 @@ class _ScanPageState extends State<ScanPage> {
       _isScanning = true;
       _errorMessage = null;
     });
-    final scanUseCase = _scanUseCaseForDomain(_selectedCaptureDomain);
+    final domain = _selectedCaptureDomain;
+    final scanUseCase = _scanUseCaseForDomain(domain);
 
     try {
-      final result = await scanUseCase.execute(image);
+      var result = await scanUseCase.execute(image);
+
+      if (domain == _ScanCaptureDomain.screen && !result.boardDetected) {
+        final detectorDebug = result.detectorDebug;
+        final isStrongReject = detectorDebug.contains(
+          'decision=reject_strong_no_board',
+        );
+        if (!isStrongReject) {
+          final strongProbability = _extractStrongProbability(detectorDebug);
+          if (strongProbability != null &&
+              strongProbability >= _screenLooseRetryStrongProbability) {
+            final looseResult = await _scanUseCaseScreenLoose.execute(image);
+            if (kDebugMode) {
+              debugPrint(
+                '[scan][screen-retry] strong_prob=${strongProbability.toStringAsFixed(3)} '
+                'threshold=${_screenLooseRetryStrongProbability.toStringAsFixed(3)} '
+                'loose_detected=${looseResult.boardDetected}',
+              );
+            }
+            result = looseResult;
+          }
+        }
+      }
+
       if (!mounted) {
         return;
       }
@@ -215,6 +258,16 @@ class _ScanPageState extends State<ScanPage> {
       case _ScanCaptureDomain.screen:
         return _scanUseCaseScreen;
     }
+  }
+
+  double? _extractStrongProbability(String detectorDebug) {
+    final match = RegExp(
+      r'strong_prob=([01](?:\.\d+)?)',
+    ).firstMatch(detectorDebug);
+    if (match == null || match.groupCount < 1) {
+      return null;
+    }
+    return double.tryParse(match.group(1)!);
   }
 
   _ScanCaptureDomain _resolveCaptureDomain({
@@ -279,14 +332,16 @@ class _ScanPageState extends State<ScanPage> {
     final rejectCount = _gateDecisionCounters['strong_reject'] ?? 0;
     final grayCount = _gateDecisionCounters['gray'] ?? 0;
     final acceptCount = _gateDecisionCounters['strong_accept'] ?? 0;
-    debugPrint(
-      '[gate-metrics] reject=' +
-          rejectCount.toString() +
-          ' gray=' +
-          grayCount.toString() +
-          ' accept=' +
-          acceptCount.toString(),
-    );
+    if (kDebugMode) {
+      debugPrint(
+        '[gate-metrics] reject=' +
+            rejectCount.toString() +
+            ' gray=' +
+            grayCount.toString() +
+            ' accept=' +
+            acceptCount.toString(),
+      );
+    }
   }
 
   bool _looksLikeScreenshotPath(String path) {
