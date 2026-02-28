@@ -72,7 +72,8 @@ def parse_args() -> argparse.Namespace:
             "Dataset dir(s). Supports: "
             "(a) root dirs containing board/ and/or no_board/ subdirs, "
             "(b) direct class dirs like no_board_screen/ (negative-only). "
-            "Can be passed multiple times."
+            "Can be passed multiple times. "
+            "Do not pass *_aug/*augmented* dirs to avoid train/val leakage."
         ),
     )
     parser.add_argument("--output-dir", type=str, default="models/board_binary")
@@ -154,6 +155,11 @@ def infer_direct_class_label(root: Path) -> int | None:
     if name == "no_board" or name.startswith("no_board_"):
         return CLASS_TO_INDEX["no_board"]
     return None
+
+
+def _is_augmented_data_root(path: Path) -> bool:
+    text = "/".join(part.lower() for part in path.parts)
+    return "_aug" in text or "augmented" in text
 
 
 def collect_samples(data_roots: list[Path]) -> list[Sample]:
@@ -429,23 +435,31 @@ def main() -> None:
         if not root.exists():
             raise SystemExit(f"data-dir not found: {root}")
 
-    samples = collect_samples(data_roots)
-    if not samples:
+    augmented_roots = [root for root in data_roots if _is_augmented_data_root(root)]
+    if augmented_roots:
+        joined = ", ".join(str(p) for p in augmented_roots)
+        raise SystemExit(
+            "Refusing augmented dirs for training to avoid train/val leakage. "
+            "Use original dirs only (rely on on-the-fly augmentation layers). "
+            f"Found: {joined}"
+        )
+
+    original_samples = collect_samples(data_roots)
+    if not original_samples:
         raise SystemExit("No images found in provided data dirs.")
 
-    samples, dropped_invalid = filter_decodable_samples(samples)
+    original_samples, dropped_invalid = filter_decodable_samples(original_samples)
     if dropped_invalid > 0:
         print(f"[train-board] dropped_invalid_images={dropped_invalid}")
-    if not samples:
-        raise SystemExit("No decodable images left after filtering invalid files.")
+    if not original_samples:
+        raise SystemExit("No decodable non-augmented images left after filtering invalid files.")
 
     train_samples, val_samples = split_stratified(
-        samples=samples,
+        samples=original_samples,
         val_split=args.val_split,
         seed=args.seed,
         min_val_per_class=args.min_val_per_class,
     )
-
     train_samples = cap_samples_per_class(
         train_samples,
         max_per_class=args.max_train_per_class,
@@ -456,10 +470,9 @@ def main() -> None:
         max_per_class=args.max_val_per_class,
         seed=args.seed + 1,
     )
-
+    original_counts = count_by_class(original_samples)
     train_counts = count_by_class(train_samples)
     val_counts = count_by_class(val_samples)
-
     train_ds = build_dataset(
         train_samples, image_size=args.image_size, batch_size=args.batch_size, training=True, seed=args.seed
     )
@@ -541,11 +554,12 @@ def main() -> None:
     tflite_path.write_bytes(tflite_bytes)
 
     top_points = sorted(points, key=lambda p: p.score, reverse=True)[:5]
-
     metrics_path = out_dir / "metrics.json"
     metrics = {
+        "original_count": len(original_samples),
         "train_count": len(train_samples),
         "val_count": len(val_samples),
+        "original_class_counts": original_counts,
         "train_class_counts": train_counts,
         "val_class_counts": val_counts,
         "class_weights": class_weights,
@@ -604,8 +618,12 @@ def main() -> None:
         },
     }
     metrics_path.write_text(json.dumps(metrics, indent=2), encoding="utf-8")
-
-    print(f"[train-board] samples_total={len(samples)} train={len(train_samples)} val={len(val_samples)}")
+    print(
+        "[train-board] original_total="
+        f"{len(original_samples)} train={len(train_samples)} val={len(val_samples)}"
+    )
+    print(f"[train-board] data_roots={len(data_roots)}")
+    print(f"[train-board] original_counts={original_counts}")
     print(f"[train-board] train_counts={train_counts} val_counts={val_counts}")
     print(f"[train-board] class_weights={class_weights}")
     print(f"[train-board] keras_eval={eval_map}")
@@ -622,5 +640,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-
-

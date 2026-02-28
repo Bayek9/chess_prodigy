@@ -18,12 +18,33 @@ import '../domain/entities/scan_validation_dataset.dart';
 import '../domain/services/fen_builder.dart';
 import '../domain/services/grid_square_mapper.dart';
 import '../domain/services/position_validator.dart';
+import '../domain/services/board_presence_classifier.dart';
 import '../domain/usecases/run_scan_dataset_validation_use_case.dart';
 import '../domain/usecases/scan_position_use_case.dart';
 import 'widgets/board_correction_editor.dart';
 import 'widgets/piece_chooser_sheet.dart';
 
 enum _ScanCaptureDomain { photoReal, photoPrint, screen }
+
+class _RoutingResolution {
+  const _RoutingResolution({
+    required this.domain,
+    required this.isAuto,
+    required this.reason,
+    this.alternateDomain,
+    this.selectedScore,
+    this.alternateScore,
+    this.ambiguous = false,
+  });
+
+  final _ScanCaptureDomain domain;
+  final bool isAuto;
+  final String reason;
+  final _ScanCaptureDomain? alternateDomain;
+  final double? selectedScore;
+  final double? alternateScore;
+  final bool ambiguous;
+}
 
 class ScanPage extends StatefulWidget {
   const ScanPage({super.key, required this.onAnalyzeFen});
@@ -36,18 +57,19 @@ class ScanPage extends StatefulWidget {
 
 class _ScanPageState extends State<ScanPage> {
   static const String _scanCoreRevision = 'scan-core-r2026-02-27-01';
-  static const double _photoRealAcceptThreshold = 0.89;
-  static const double _photoRealRejectThreshold = 0.60;
-  static const double _screenAcceptThreshold = 0.54;
-  static const double _screenRejectThreshold = 0.41;
+  static const double _photoRealAcceptThreshold = 0.81;
+  static const double _photoRealRejectThreshold = 0.50;
+  static const double _screenAcceptThreshold = 0.89;
+  static const double _screenRejectThreshold = 0.57;
   static const double _screenOpenCvMinBoardConfidence = 0.30;
   static const double _screenOpenCvMinBoardConfidenceLineFallback = 0.34;
   static const double _screenLooseRetryStrongProbability = 0.55;
   static const double _screenLooseOpenCvMinBoardConfidence = 0.20;
   static const double _screenLooseOpenCvMinBoardConfidenceLineFallback = 0.24;
   static const double _screenMinPostWarpGridness = 0.11;
-  static const String _photoRealBoardModelAssetPath =
-      'assets/scan_models/board_binary.tflite';
+  static const double _autoRoutingAmbiguousScoreDelta = 0.05;
+  static const String _photoBoardModelAssetPath =
+      'assets/scan_models/board_binary_photo.tflite';
   static const String _screenBoardModelAssetPath =
       'assets/scan_models/board_binary_screen.tflite';
 
@@ -62,6 +84,8 @@ class _ScanPageState extends State<ScanPage> {
   late final ScanPositionUseCase _datasetScanUseCaseFast;
   late final RunScanDatasetValidationUseCase _datasetValidationUseCase;
   late final RunScanDatasetValidationUseCase _datasetValidationUseCaseFast;
+  late final BoardPresenceClassifier _photoGateClassifier;
+  late final BoardPresenceClassifier _screenGateClassifier;
 
   ScanInputImage? _selectedImage;
   ScanPipelineResult? _scanResult;
@@ -83,6 +107,10 @@ class _ScanPageState extends State<ScanPage> {
   List<BoardCorner> _manualCorners = const <BoardCorner>[];
   ImageSource? _selectedImageSource;
   _ScanCaptureDomain _selectedCaptureDomain = _ScanCaptureDomain.screen;
+  _ScanCaptureDomain? _captureDomainOverride;
+  String _routingDebugLabel = 'mode=auto';
+  int _autoRouteScanCount = 0;
+  int _autoRouteRetryCount = 0;
   bool _selectedImageHasExif = false;
   bool _selectedImageLooksScreenshot = false;
   final Map<String, int> _gateDecisionCounters = <String, int>{
@@ -97,13 +125,21 @@ class _ScanPageState extends State<ScanPage> {
     if (kDebugMode) {
       debugPrint('[scan][tflite] runtime=${tfl.version}');
     }
+    _photoGateClassifier =
+        DefaultScanPipelineFactory.boardPresenceClassifierForAsset(
+          modelAssetPath: _photoBoardModelAssetPath,
+        );
+    _screenGateClassifier =
+        DefaultScanPipelineFactory.boardPresenceClassifierForAsset(
+          modelAssetPath: _screenBoardModelAssetPath,
+        );
     _scanUseCasePhotoReal = DefaultScanPipelineFactory.create(
       validator: _validator,
       fenBuilder: _fenBuilder,
       useBoardPresenceGate: true,
       boardPresenceThreshold: _photoRealAcceptThreshold,
       boardPresenceRejectThreshold: _photoRealRejectThreshold,
-      boardPresenceModelAssetPath: _photoRealBoardModelAssetPath,
+      boardPresenceModelAssetPath: _photoBoardModelAssetPath,
       useFallbackForReject: true,
     );
     _scanUseCaseScreen = DefaultScanPipelineFactory.create(
@@ -177,6 +213,9 @@ class _ScanPageState extends State<ScanPage> {
         _selectedImage = ScanInputImage(path: file.path, bytes: bytes);
         _selectedImageSource = source;
         _selectedCaptureDomain = captureDomain;
+        _captureDomainOverride = null;
+        _routingDebugLabel =
+            'mode=auto hint=${_captureDomainLabel(captureDomain)} pending_scan';
         _selectedImageHasExif = hasExif;
         _selectedImageLooksScreenshot = looksScreenshot;
         _scanResult = null;
@@ -205,46 +244,68 @@ class _ScanPageState extends State<ScanPage> {
       _isScanning = true;
       _errorMessage = null;
     });
-    final domain = _selectedCaptureDomain;
-    final scanUseCase = _scanUseCaseForDomain(domain);
 
     try {
-      var result = await scanUseCase.execute(image);
+      final routing = await _resolveRoutingForScan(image);
+      var resolvedDomain = routing.domain;
+      final allowScreenLooseRetry = !routing.isAuto;
+      var result = await _scanWithDomain(
+        domain: resolvedDomain,
+        image: image,
+        allowScreenLooseRetry: allowScreenLooseRetry,
+      );
+      var routingDebug = routing.reason;
 
-      if (domain == _ScanCaptureDomain.screen && !result.boardDetected) {
-        final detectorDebug = result.detectorDebug;
-        final isStrongReject = detectorDebug.contains(
-          'decision=reject_strong_no_board',
+      var retries = 0;
+      const maxRetries = 1;
+      final shouldRetryAlternate =
+          routing.isAuto &&
+          routing.ambiguous &&
+          !result.boardDetected &&
+          routing.selectedScore != null &&
+          routing.selectedScore! >= 0.0 &&
+          routing.alternateDomain != null;
+      if (shouldRetryAlternate && retries < maxRetries) {
+        retries += 1;
+        final alternateDomain = routing.alternateDomain!;
+        final alternateResult = await _scanWithDomain(
+          domain: alternateDomain,
+          image: image,
+          allowScreenLooseRetry: false,
         );
-        if (!isStrongReject) {
-          final gateAllowed = _extractGateAllowed(detectorDebug) ?? false;
-          final strongProbability = _extractStrongProbability(detectorDebug);
-          final shouldRetryLoose =
-              gateAllowed ||
-              (strongProbability != null &&
-                  strongProbability >= _screenLooseRetryStrongProbability);
-          if (shouldRetryLoose) {
-            final looseResult = await _scanUseCaseScreenLoose.execute(image);
-            if (kDebugMode) {
-              debugPrint(
-                '[scan][screen-retry] gate_allowed=$gateAllowed '
-                'strong_prob=${strongProbability?.toStringAsFixed(3) ?? "na"} '
-                'threshold=${_screenLooseRetryStrongProbability.toStringAsFixed(3)} '
-                'loose_detected=${looseResult.boardDetected}',
-              );
-            }
-            result = looseResult;
-          }
+        final switched = alternateResult.boardDetected && !result.boardDetected;
+        if (switched) {
+          result = alternateResult;
+          resolvedDomain = alternateDomain;
         }
+        routingDebug =
+            '$routingDebug retry_alt=${_captureDomainLabel(alternateDomain)} '
+            'retry_count=$retries/$maxRetries '
+            'switched=$switched alt_board=${alternateResult.boardDetected}';
+      }
+
+      if (kDebugMode) {
+        debugPrint(
+          '[scan][auto-route] chosen=${_captureDomainLabel(resolvedDomain)} '
+          '$routingDebug',
+        );
       }
 
       if (!mounted) {
         return;
       }
       setState(() {
+        _selectedCaptureDomain = resolvedDomain;
+        _routingDebugLabel = routingDebug;
         _scanResult = result;
         _editablePosition = result.detectedPosition;
         _recordGateDecision(result.detectorDebug);
+        if (routing.isAuto) {
+          _autoRouteScanCount += 1;
+          if (shouldRetryAlternate) {
+            _autoRouteRetryCount += 1;
+          }
+        }
         _refreshFenAndValidation();
       });
     } catch (e) {
@@ -257,6 +318,198 @@ class _ScanPageState extends State<ScanPage> {
         setState(() => _isScanning = false);
       }
     }
+  }
+
+  Future<_RoutingResolution> _resolveRoutingForScan(
+    ScanInputImage image,
+  ) async {
+    final overrideDomain = _captureDomainOverride;
+    if (overrideDomain != null) {
+      return _RoutingResolution(
+        domain: overrideDomain,
+        isAuto: false,
+        reason: 'mode=override forced=${_captureDomainLabel(overrideDomain)}',
+      );
+    }
+    return _resolveAutoRoutingForScan(image);
+  }
+
+  Future<_RoutingResolution> _resolveAutoRoutingForScan(
+    ScanInputImage image,
+  ) async {
+    final hintedDomain = _resolveCaptureDomain(
+      source: _selectedImageSource,
+      hasExif: _selectedImageHasExif,
+      looksScreenshot: _selectedImageLooksScreenshot,
+    );
+
+    try {
+      // Run gate predictions sequentially to avoid potential interpreter
+      // concurrency issues on some TFLite bindings/delegates.
+      final screenPrediction = await _screenGateClassifier.predict(image);
+      final photoPrediction = await _photoGateClassifier.predict(image);
+      final screenStrong = screenPrediction.isAvailable
+          ? screenPrediction.probability.clamp(0.0, 1.0).toDouble()
+          : null;
+      final photoStrong = photoPrediction.isAvailable
+          ? photoPrediction.probability.clamp(0.0, 1.0).toDouble()
+          : null;
+      final screenScore = _scoreForRouting(
+        prediction: screenPrediction,
+        rejectThreshold: _screenRejectThreshold,
+      );
+      final photoScore = _scoreForRouting(
+        prediction: photoPrediction,
+        rejectThreshold: _photoRealRejectThreshold,
+      );
+
+      if (screenScore == null && photoScore == null) {
+        return _RoutingResolution(
+          domain: hintedDomain,
+          isAuto: true,
+          reason:
+              'mode=auto fallback=hint both_unavailable '
+              'hint=${_captureDomainLabel(hintedDomain)}',
+        );
+      }
+
+      final chooseScreen =
+          photoScore == null ||
+          (screenScore != null && screenScore >= photoScore);
+      final domain = chooseScreen
+          ? _ScanCaptureDomain.screen
+          : _ScanCaptureDomain.photoReal;
+      final alternate = chooseScreen
+          ? _ScanCaptureDomain.photoReal
+          : _ScanCaptureDomain.screen;
+      final selectedScore = chooseScreen ? screenScore : photoScore;
+      final alternateScore = chooseScreen ? photoScore : screenScore;
+      final delta = (screenScore != null && photoScore != null)
+          ? (screenScore - photoScore).abs()
+          : null;
+      final ambiguous =
+          delta != null && delta < _autoRoutingAmbiguousScoreDelta;
+
+      return _RoutingResolution(
+        domain: domain,
+        alternateDomain: alternate,
+        selectedScore: selectedScore,
+        alternateScore: alternateScore,
+        ambiguous: ambiguous,
+        isAuto: true,
+        reason:
+            'mode=auto '
+            'screen_strong=${_fmtRoutingNumber(screenStrong)} '
+            'screen_reject=${_screenRejectThreshold.toStringAsFixed(3)} '
+            'screen_score=${_fmtRoutingNumber(screenScore)} '
+            'photo_strong=${_fmtRoutingNumber(photoStrong)} '
+            'photo_reject=${_photoRealRejectThreshold.toStringAsFixed(3)} '
+            'photo_score=${_fmtRoutingNumber(photoScore)} '
+            'delta=${_fmtRoutingNumber(delta)} '
+            'ambiguity_rule=delta<${_autoRoutingAmbiguousScoreDelta.toStringAsFixed(3)} '
+            'ambiguous=$ambiguous '
+            'selected=${_captureDomainLabel(domain)}',
+      );
+    } catch (e) {
+      return _RoutingResolution(
+        domain: hintedDomain,
+        isAuto: true,
+        reason:
+            'mode=auto fallback=hint predict_error=$e '
+            'hint=${_captureDomainLabel(hintedDomain)}',
+      );
+    }
+  }
+
+  double? _scoreForRouting({
+    required BoardPresencePrediction prediction,
+    required double rejectThreshold,
+  }) {
+    if (!prediction.isAvailable) {
+      return null;
+    }
+    final strongProbability = prediction.probability.clamp(0.0, 1.0).toDouble();
+    return strongProbability - rejectThreshold;
+  }
+
+  String _fmtRoutingNumber(double? value) {
+    return value == null ? 'na' : value.toStringAsFixed(3);
+  }
+
+  String _routingModeLabel() {
+    return _captureDomainOverride == null ? 'auto' : 'override';
+  }
+
+  String _autoRoutingRetrySummary() {
+    final total = _autoRouteScanCount;
+    final retries = _autoRouteRetryCount;
+    final percent = total == 0 ? 0.0 : (retries * 100.0 / total);
+    return 'Auto retries: $retries/$total (${percent.toStringAsFixed(1)}%)';
+  }
+
+  void _setCaptureDomainOverride(_ScanCaptureDomain? domain) {
+    setState(() {
+      _captureDomainOverride = domain;
+      if (domain != null) {
+        _selectedCaptureDomain = domain;
+        _routingDebugLabel =
+            'mode=override forced=${_captureDomainLabel(domain)}';
+      } else {
+        _routingDebugLabel =
+            'mode=auto hint=${_captureDomainLabel(_selectedCaptureDomain)}';
+      }
+    });
+  }
+
+  Future<ScanPipelineResult> _scanWithDomain({
+    required _ScanCaptureDomain domain,
+    required ScanInputImage image,
+    bool allowScreenLooseRetry = false,
+  }) async {
+    final useCase = _scanUseCaseForDomain(domain);
+    var result = await useCase.execute(image);
+    if (domain == _ScanCaptureDomain.screen && allowScreenLooseRetry) {
+      result = await _maybeRetryScreenLoose(image: image, result: result);
+    }
+    return result;
+  }
+
+  Future<ScanPipelineResult> _maybeRetryScreenLoose({
+    required ScanInputImage image,
+    required ScanPipelineResult result,
+  }) async {
+    if (result.boardDetected) {
+      return result;
+    }
+
+    final detectorDebug = result.detectorDebug;
+    final isStrongReject = detectorDebug.contains(
+      'decision=reject_strong_no_board',
+    );
+    if (isStrongReject) {
+      return result;
+    }
+
+    final gateAllowed = _extractGateAllowed(detectorDebug) ?? false;
+    final strongProbability = _extractStrongProbability(detectorDebug);
+    final shouldRetryLoose =
+        gateAllowed ||
+        (strongProbability != null &&
+            strongProbability >= _screenLooseRetryStrongProbability);
+    if (!shouldRetryLoose) {
+      return result;
+    }
+
+    final looseResult = await _scanUseCaseScreenLoose.execute(image);
+    if (kDebugMode) {
+      debugPrint(
+        '[scan][screen-retry] gate_allowed=$gateAllowed '
+        'strong_prob=${strongProbability?.toStringAsFixed(3) ?? "na"} '
+        'threshold=${_screenLooseRetryStrongProbability.toStringAsFixed(3)} '
+        'loose_detected=${looseResult.boardDetected}',
+      );
+    }
+    return looseResult;
   }
 
   ScanPositionUseCase _scanUseCaseForDomain(_ScanCaptureDomain domain) {
@@ -674,6 +927,9 @@ class _ScanPageState extends State<ScanPage> {
         hasExif: inferredHasExif,
         looksScreenshot: inferredLooksScreenshot,
       );
+      _captureDomainOverride = null;
+      _routingDebugLabel =
+          'mode=auto hint=${_captureDomainLabel(_selectedCaptureDomain)} dataset_eval';
       _selectedImageHasExif = inferredHasExif;
       _selectedImageLooksScreenshot = inferredLooksScreenshot;
       _scanResult = evaluation.result;
@@ -1177,12 +1433,21 @@ class _ScanPageState extends State<ScanPage> {
                     const SizedBox(height: 8),
                     Text(
                       'Routing: ${_captureDomainLabel(_selectedCaptureDomain)} '
-                      '(source=${_selectedImageSourceLabel()}, '
+                      '(mode=${_routingModeLabel()}, '
+                      'source=${_selectedImageSourceLabel()}, '
                       'screenshot_hint=${_selectedImageLooksScreenshot ? "yes" : "no"}, '
                       'exif=${_selectedImageHasExif ? "present" : "absent"})',
                       style: TextStyle(
                         fontSize: 12,
                         color: Colors.white.withValues(alpha: 0.75),
+                      ),
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      _routingDebugLabel,
+                      style: TextStyle(
+                        fontSize: 11,
+                        color: Colors.white.withValues(alpha: 0.65),
                       ),
                     ),
                     const SizedBox(height: 4),
@@ -1196,12 +1461,19 @@ class _ScanPageState extends State<ScanPage> {
                         color: Colors.white.withValues(alpha: 0.70),
                       ),
                     ),
+                    const SizedBox(height: 2),
+                    Text(
+                      _autoRoutingRetrySummary(),
+                      style: TextStyle(
+                        fontSize: 11,
+                        color: Colors.white.withValues(alpha: 0.65),
+                      ),
+                    ),
                   ],
-                  if (_selectedImage != null &&
-                      _selectedImageSource == ImageSource.gallery) ...[
+                  if (_selectedImage != null) ...[
                     const SizedBox(height: 8),
                     Text(
-                      'Override domaine (gallery)',
+                      'Routing mode (AUTO par contenu ou override)',
                       style: TextStyle(
                         fontSize: 12,
                         color: Colors.white.withValues(alpha: 0.75),
@@ -1213,47 +1485,54 @@ class _ScanPageState extends State<ScanPage> {
                       runSpacing: 8,
                       children: [
                         ChoiceChip(
+                          label: const Text('AUTO'),
+                          selected: _captureDomainOverride == null,
+                          onSelected: (selected) {
+                            if (!selected) {
+                              return;
+                            }
+                            _setCaptureDomainOverride(null);
+                          },
+                        ),
+                        ChoiceChip(
                           label: const Text('Photo reelle'),
                           selected:
-                              _selectedCaptureDomain ==
+                              _captureDomainOverride ==
                               _ScanCaptureDomain.photoReal,
                           onSelected: (selected) {
                             if (!selected) {
                               return;
                             }
-                            setState(
-                              () => _selectedCaptureDomain =
-                                  _ScanCaptureDomain.photoReal,
+                            _setCaptureDomainOverride(
+                              _ScanCaptureDomain.photoReal,
                             );
                           },
                         ),
                         ChoiceChip(
                           label: const Text('Photo imprimee (livre)'),
                           selected:
-                              _selectedCaptureDomain ==
+                              _captureDomainOverride ==
                               _ScanCaptureDomain.photoPrint,
                           onSelected: (selected) {
                             if (!selected) {
                               return;
                             }
-                            setState(
-                              () => _selectedCaptureDomain =
-                                  _ScanCaptureDomain.photoPrint,
+                            _setCaptureDomainOverride(
+                              _ScanCaptureDomain.photoPrint,
                             );
                           },
                         ),
                         ChoiceChip(
                           label: const Text('Screenshot / ecran'),
                           selected:
-                              _selectedCaptureDomain ==
+                              _captureDomainOverride ==
                               _ScanCaptureDomain.screen,
                           onSelected: (selected) {
                             if (!selected) {
                               return;
                             }
-                            setState(
-                              () => _selectedCaptureDomain =
-                                  _ScanCaptureDomain.screen,
+                            _setCaptureDomainOverride(
+                              _ScanCaptureDomain.screen,
                             );
                           },
                         ),
@@ -1896,3 +2175,4 @@ class _ImagePreview extends StatelessWidget {
     );
   }
 }
+

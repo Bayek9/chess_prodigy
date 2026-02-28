@@ -229,48 +229,45 @@ For 2D screen routing (`screenshot` / `photo_screen`), do not use real-world neg
 (e.g. `datasets/external/board_binary_no_board`) during calibration.
 Use same-domain negatives only.
 
-Recommended split for screen data:
+Recommended split for screen data (safe, no leakage):
 
-- No-board originals: `datasets/real_scan/board_binary/no_board_screen/`
-- No-board augmented copies (train-only): `datasets/real_scan/board_binary/no_board_screen_aug/`
-- Board originals: `datasets/real_scan/board_binary_domain/screenshot/board/`
-- Board augmented copies (train-only): `datasets/real_scan/board_binary_domain/screenshot_aug/board/`
+- Originals only: `datasets/real_scan/board_binary_domain/screenshot/{board,no_board}`
+- Originals only: `datasets/real_scan/board_binary_domain/photo_screen/{board,no_board}`
+- Any `*_aug` folders are TRAIN-OFF in this script version and must not be passed.
 
-```powershell
-New-Item -ItemType Directory -Force datasets/real_scan/board_binary/no_board_screen | Out-Null
-New-Item -ItemType Directory -Force datasets/real_scan/board_binary/no_board_screen_aug | Out-Null
-New-Item -ItemType Directory -Force datasets/real_scan/board_binary_domain/screenshot_aug/board | Out-Null
-```
-
-Training command (includes original + augmented board/no-board):
+Training command (original folders only):
 
 ```powershell
 python tools/dataset/train_board_binary_classifier.py `
-  --data-dir datasets/real_scan/board_binary_domain/photo_screen `
   --data-dir datasets/real_scan/board_binary_domain/screenshot `
-  --data-dir datasets/real_scan/board_binary_domain/screenshot_aug `
-  --data-dir datasets/real_scan/board_binary/no_board_screen `
-  --data-dir datasets/real_scan/board_binary/no_board_screen_aug `
-  --output-dir models/board_binary_screen
+  --data-dir datasets/real_scan/board_binary_domain/photo_screen `
+  --output-dir models/board_binary_screen `
+  --image-size 192 `
+  --batch-size 16 `
+  --epochs 30 `
+  --seed 42 `
+  --val-split 0.2
 ```
 
-Calibration command (original board/no_board only; no `_aug`):
+Calibration command (original folders only):
 
 ```powershell
 python tools/dataset/calibrate_board_threshold.py `
   --model-path models/board_binary_screen/board_binary.keras `
-  --data-dir datasets/real_scan/board_binary_domain/photo_screen `
   --data-dir datasets/real_scan/board_binary_domain/screenshot `
-  --data-dir datasets/real_scan/board_binary/no_board_screen `
+  --data-dir datasets/real_scan/board_binary_domain/photo_screen `
+  --image-size 192 `
+  --batch-size 64 `
+  --seed 42 `
   --val-split 0.2 `
   --test-split 0.2 `
+  --hysteresis-min-gap 0.05 `
   --output-json models/board_binary_screen/threshold_calibration_screen.json
 ```
 
 `train_board_binary_classifier.py` and `calibrate_board_threshold.py` accept direct
 class directories like `no_board_screen/` as negative-only inputs.
-`calibrate_board_threshold.py` now blocks `*_aug/*augmented*` by default to avoid leakage
-(use `--allow-augmented-data` only if you intentionally override this).
+Both scripts now block `*_aug/*augmented*` roots to prevent train/val/test leakage.
 
 ## 6) Increase no_board / board counts quickly
 
@@ -310,5 +307,6 @@ Then run:
 ```powershell
 flutter pub get
 ```
+
 
 
