@@ -1,5 +1,6 @@
 import '../../domain/services/fen_builder.dart';
 import '../../domain/services/position_validator.dart';
+import '../../domain/services/board_presence_classifier.dart';
 import '../../domain/usecases/scan_position_use_case.dart';
 import '../mock/mock_board_rectifier.dart';
 import '../mock/mock_piece_classifier.dart';
@@ -21,6 +22,15 @@ class DefaultScanPipelineFactory {
   static final Map<String, TfliteBoardPresenceClassifier>
   _boardPresenceClassifiersByAsset = <String, TfliteBoardPresenceClassifier>{};
 
+  static BoardPresenceClassifier boardPresenceClassifierForAsset({
+    required String modelAssetPath,
+  }) {
+    return _boardPresenceClassifiersByAsset.putIfAbsent(
+      modelAssetPath,
+      () => TfliteBoardPresenceClassifier(modelAssetPath: modelAssetPath),
+    );
+  }
+
   static ScanPositionUseCase create({
     PositionValidator? validator,
     FenBuilder? fenBuilder,
@@ -37,11 +47,8 @@ class DefaultScanPipelineFactory {
   }) {
     final fallbackDetector = const StatisticalBoardDetector();
     final boardPresenceClassifier = useBoardPresenceGate
-        ? _boardPresenceClassifiersByAsset.putIfAbsent(
-            boardPresenceModelAssetPath,
-            () => TfliteBoardPresenceClassifier(
-              modelAssetPath: boardPresenceModelAssetPath,
-            ),
+        ? boardPresenceClassifierForAsset(
+            modelAssetPath: boardPresenceModelAssetPath,
           )
         : null;
 

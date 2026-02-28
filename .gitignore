@@ -56,3 +56,5 @@ packages/opencv_4/example/
 # Keep scan photos local only (not pushed to GitHub)
 assets/scan_samples/images/*
 !assets/scan_samples/images/.gitkeep
+
+tools/tmp/
