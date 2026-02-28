@@ -46,6 +46,36 @@ class _RoutingResolution {
   final bool ambiguous;
 }
 
+enum _FieldExpectedDomain { screen, photoReal }
+
+enum _FieldExpectedClass { board, noBoard }
+
+class _FieldTestEntry {
+  const _FieldTestEntry({
+    required this.index,
+    required this.timestamp,
+    required this.expectedDomain,
+    required this.expectedClass,
+    required this.chosenDomain,
+    required this.decision,
+    required this.boardDetected,
+    required this.routingDebug,
+    required this.detectorDebug,
+    required this.imagePath,
+  });
+
+  final int index;
+  final DateTime timestamp;
+  final _FieldExpectedDomain expectedDomain;
+  final _FieldExpectedClass expectedClass;
+  final _ScanCaptureDomain chosenDomain;
+  final String decision; // reject | gray | accept
+  final bool boardDetected;
+  final String routingDebug;
+  final String detectorDebug;
+  final String imagePath;
+}
+
 class ScanPage extends StatefulWidget {
   const ScanPage({super.key, required this.onAnalyzeFen});
 
@@ -68,6 +98,8 @@ class _ScanPageState extends State<ScanPage> {
   static const double _screenLooseOpenCvMinBoardConfidenceLineFallback = 0.24;
   static const double _screenMinPostWarpGridness = 0.11;
   static const double _autoRoutingAmbiguousScoreDelta = 0.05;
+  static const int _fieldProtocolBucketTarget = 10;
+  static const int _fieldProtocolTotalTarget = 40;
   static const String _photoBoardModelAssetPath =
       'assets/scan_models/board_binary_photo.tflite';
   static const String _screenBoardModelAssetPath =
@@ -118,6 +150,9 @@ class _ScanPageState extends State<ScanPage> {
     'gray': 0,
     'strong_accept': 0,
   };
+  _FieldExpectedDomain _fieldExpectedDomain = _FieldExpectedDomain.screen;
+  _FieldExpectedClass _fieldExpectedClass = _FieldExpectedClass.board;
+  final List<_FieldTestEntry> _fieldTestEntries = <_FieldTestEntry>[];
 
   @override
   void initState() {
@@ -631,6 +666,270 @@ class _ScanPageState extends State<ScanPage> {
         '[gate-metrics] reject=$rejectCount gray=$grayCount accept=$acceptCount',
       );
     }
+  }
+
+  String _decisionLabelFromDetectorDebug(String detectorDebug) {
+    final bucket = _gateDecisionBucket(detectorDebug);
+    switch (bucket) {
+      case 'strong_reject':
+        return 'reject';
+      case 'strong_accept':
+        return 'accept';
+      default:
+        return 'gray';
+    }
+  }
+
+  _FieldExpectedDomain _normalizedFieldDomain(_ScanCaptureDomain domain) {
+    if (domain == _ScanCaptureDomain.screen) {
+      return _FieldExpectedDomain.screen;
+    }
+    return _FieldExpectedDomain.photoReal;
+  }
+
+  String _fieldExpectedDomainLabel(_FieldExpectedDomain domain) {
+    switch (domain) {
+      case _FieldExpectedDomain.screen:
+        return 'screen';
+      case _FieldExpectedDomain.photoReal:
+        return 'photo_real';
+    }
+  }
+
+  String _fieldExpectedClassLabel(_FieldExpectedClass expectedClass) {
+    switch (expectedClass) {
+      case _FieldExpectedClass.board:
+        return 'board';
+      case _FieldExpectedClass.noBoard:
+        return 'no_board';
+    }
+  }
+
+  String _fieldBucketKey(
+    _FieldExpectedDomain domain,
+    _FieldExpectedClass expectedClass,
+  ) {
+    return '${_fieldExpectedDomainLabel(domain)}_${_fieldExpectedClassLabel(expectedClass)}';
+  }
+
+  Map<String, int> _fieldProtocolCounts() {
+    final counts = <String, int>{
+      'screen_board': 0,
+      'screen_no_board': 0,
+      'photo_real_board': 0,
+      'photo_real_no_board': 0,
+    };
+    for (final entry in _fieldTestEntries) {
+      final key = _fieldBucketKey(entry.expectedDomain, entry.expectedClass);
+      counts[key] = (counts[key] ?? 0) + 1;
+    }
+    return counts;
+  }
+
+  bool _isFalsePositiveEntry(_FieldTestEntry entry) {
+    return entry.expectedClass == _FieldExpectedClass.noBoard &&
+        entry.boardDetected;
+  }
+
+  bool _isFalseNegativeEntry(_FieldTestEntry entry) {
+    return entry.expectedClass == _FieldExpectedClass.board &&
+        !entry.boardDetected;
+  }
+
+  String _fieldOutcomeLabel(_FieldTestEntry entry) {
+    if (entry.expectedClass == _FieldExpectedClass.board) {
+      return entry.boardDetected ? 'TP' : 'FN';
+    }
+    return entry.boardDetected ? 'FP' : 'TN';
+  }
+
+  String _fieldEntryShort(_FieldTestEntry entry) {
+    final expected =
+        '${_fieldExpectedDomainLabel(entry.expectedDomain)}/${_fieldExpectedClassLabel(entry.expectedClass)}';
+    return '#${entry.index} '
+        'exp=$expected '
+        'chosen=${_captureDomainLabel(entry.chosenDomain)} '
+        'decision=${entry.decision} '
+        'board=${entry.boardDetected} '
+        'outcome=${_fieldOutcomeLabel(entry)}';
+  }
+
+  void _recordCurrentScanToFieldProtocol() {
+    final result = _scanResult;
+    if (result == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Run a scan before logging protocol data.'),
+        ),
+      );
+      return;
+    }
+
+    setState(() {
+      _fieldTestEntries.add(
+        _FieldTestEntry(
+          index: _fieldTestEntries.length + 1,
+          timestamp: DateTime.now(),
+          expectedDomain: _fieldExpectedDomain,
+          expectedClass: _fieldExpectedClass,
+          chosenDomain: _selectedCaptureDomain,
+          decision: _decisionLabelFromDetectorDebug(result.detectorDebug),
+          boardDetected: result.boardDetected,
+          routingDebug: _routingDebugLabel,
+          detectorDebug: result.detectorDebug,
+          imagePath: _selectedImage?.path ?? '',
+        ),
+      );
+    });
+
+    if (!mounted) {
+      return;
+    }
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          'Logged protocol sample ${_fieldTestEntries.length}/$_fieldProtocolTotalTarget.',
+        ),
+      ),
+    );
+  }
+
+  void _clearFieldProtocolEntries() {
+    if (_fieldTestEntries.isEmpty) {
+      return;
+    }
+    setState(() => _fieldTestEntries.clear());
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(const SnackBar(content: Text('Protocol samples cleared.')));
+  }
+
+  String _buildFieldProtocolReportText() {
+    final counts = _fieldProtocolCounts();
+    final falsePositives = _fieldTestEntries
+        .where(_isFalsePositiveEntry)
+        .length;
+    final falseNegatives = _fieldTestEntries
+        .where(_isFalseNegativeEntry)
+        .length;
+    final total = _fieldTestEntries.length;
+
+    final lines = <String>[
+      'Field protocol report',
+      'revision=$_scanCoreRevision',
+      'total=$total/$_fieldProtocolTotalTarget',
+      'screen_board=${counts['screen_board'] ?? 0}/$_fieldProtocolBucketTarget',
+      'screen_no_board=${counts['screen_no_board'] ?? 0}/$_fieldProtocolBucketTarget',
+      'photo_real_board=${counts['photo_real_board'] ?? 0}/$_fieldProtocolBucketTarget',
+      'photo_real_no_board=${counts['photo_real_no_board'] ?? 0}/$_fieldProtocolBucketTarget',
+      'false_positive=$falsePositives',
+      'false_negative=$falseNegatives',
+      '',
+      'entries:',
+    ];
+
+    for (final entry in _fieldTestEntries) {
+      final expectedDomain = _fieldExpectedDomainLabel(entry.expectedDomain);
+      final expectedClass = _fieldExpectedClassLabel(entry.expectedClass);
+      final chosenDomain = _captureDomainLabel(entry.chosenDomain);
+      final routeMatch =
+          _normalizedFieldDomain(entry.chosenDomain) == entry.expectedDomain;
+      lines.add(
+        '#${entry.index} t=${entry.timestamp.toIso8601String()} '
+        'expected=${expectedDomain}/${expectedClass} '
+        'chosen=${chosenDomain} route_match=$routeMatch '
+        'decision=${entry.decision} boardDetected=${entry.boardDetected} '
+        'outcome=${_fieldOutcomeLabel(entry)}',
+      );
+    }
+
+    return lines.join('\n');
+  }
+
+  Future<void> _copyFieldProtocolReport() async {
+    if (_fieldTestEntries.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('No protocol samples to copy.')),
+      );
+      return;
+    }
+
+    final text = _buildFieldProtocolReportText();
+    await Clipboard.setData(ClipboardData(text: text));
+    if (!mounted) {
+      return;
+    }
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(const SnackBar(content: Text('Protocol report copied.')));
+  }
+
+  _FieldTestEntry? _latestFieldEntryWhere(
+    bool Function(_FieldTestEntry entry) predicate,
+  ) {
+    for (var i = _fieldTestEntries.length - 1; i >= 0; i--) {
+      final entry = _fieldTestEntries[i];
+      if (predicate(entry)) {
+        return entry;
+      }
+    }
+    return null;
+  }
+
+  String _buildDetailedCaseLog(_FieldTestEntry entry, {required String kind}) {
+    final expectedDomain = _fieldExpectedDomainLabel(entry.expectedDomain);
+    final expectedClass = _fieldExpectedClassLabel(entry.expectedClass);
+    return [
+      'case_type=$kind',
+      'index=${entry.index}',
+      'timestamp=${entry.timestamp.toIso8601String()}',
+      'expected_domain=$expectedDomain',
+      'expected_class=$expectedClass',
+      'chosen_domain=${_captureDomainLabel(entry.chosenDomain)}',
+      'decision=${entry.decision}',
+      'boardDetected=${entry.boardDetected}',
+      'routing_debug=${entry.routingDebug}',
+      'detector_debug=${entry.detectorDebug}',
+      'image_path=${entry.imagePath}',
+    ].join('\n');
+  }
+
+  Future<void> _copyLatestFalsePositiveLog() async {
+    final entry = _latestFieldEntryWhere(_isFalsePositiveEntry);
+    if (entry == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('No false positive logged yet.')),
+      );
+      return;
+    }
+    await Clipboard.setData(
+      ClipboardData(text: _buildDetailedCaseLog(entry, kind: 'false_positive')),
+    );
+    if (!mounted) {
+      return;
+    }
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('Latest false positive log copied.')),
+    );
+  }
+
+  Future<void> _copyLatestFalseNegativeLog() async {
+    final entry = _latestFieldEntryWhere(_isFalseNegativeEntry);
+    if (entry == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('No false negative logged yet.')),
+      );
+      return;
+    }
+    await Clipboard.setData(
+      ClipboardData(text: _buildDetailedCaseLog(entry, kind: 'false_negative')),
+    );
+    if (!mounted) {
+      return;
+    }
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('Latest false negative log copied.')),
+    );
   }
 
   bool _looksLikeScreenshotPath(String path) {
@@ -1332,6 +1631,17 @@ class _ScanPageState extends State<ScanPage> {
   Widget build(BuildContext context) {
     final imageBytes = _selectedImage?.bytes;
     final rectifiedBytes = _scanResult?.rectifiedBoard.bytes;
+    final protocolCounts = _fieldProtocolCounts();
+    final protocolFalsePositives = _fieldTestEntries
+        .where(_isFalsePositiveEntry)
+        .length;
+    final protocolFalseNegatives = _fieldTestEntries
+        .where(_isFalseNegativeEntry)
+        .length;
+    final protocolLatestLines = _fieldTestEntries.reversed
+        .take(5)
+        .map(_fieldEntryShort)
+        .toList(growable: false);
 
     return Scaffold(
       appBar: AppBar(title: const Text('Scan position')),
@@ -1544,6 +1854,190 @@ class _ScanPageState extends State<ScanPage> {
                       style: TextStyle(
                         fontSize: 11,
                         color: Colors.white.withValues(alpha: 0.65),
+                      ),
+                    ),
+                  ],
+                ],
+              ),
+            ),
+            const SizedBox(height: 12),
+            _SectionCard(
+              title: 'Protocole terrain (40 tests)',
+              subtitle:
+                  'Log terrain pour ChatGPT: domaine choisi, decision, boardDetected.',
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    'Progression: ${_fieldTestEntries.length}/$_fieldProtocolTotalTarget',
+                    style: TextStyle(
+                      fontSize: 12,
+                      color: Colors.white.withValues(alpha: 0.80),
+                    ),
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    'screen_board ${protocolCounts['screen_board'] ?? 0}/$_fieldProtocolBucketTarget | '
+                    'screen_no_board ${protocolCounts['screen_no_board'] ?? 0}/$_fieldProtocolBucketTarget',
+                    style: TextStyle(
+                      fontSize: 11,
+                      color: Colors.white.withValues(alpha: 0.70),
+                    ),
+                  ),
+                  Text(
+                    'photo_real_board ${protocolCounts['photo_real_board'] ?? 0}/$_fieldProtocolBucketTarget | '
+                    'photo_real_no_board ${protocolCounts['photo_real_no_board'] ?? 0}/$_fieldProtocolBucketTarget',
+                    style: TextStyle(
+                      fontSize: 11,
+                      color: Colors.white.withValues(alpha: 0.70),
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  Text(
+                    'Attendu: domaine',
+                    style: TextStyle(
+                      fontSize: 12,
+                      color: Colors.white.withValues(alpha: 0.75),
+                    ),
+                  ),
+                  const SizedBox(height: 6),
+                  Wrap(
+                    spacing: 8,
+                    runSpacing: 8,
+                    children: [
+                      ChoiceChip(
+                        label: const Text('screen'),
+                        selected:
+                            _fieldExpectedDomain == _FieldExpectedDomain.screen,
+                        onSelected: (selected) {
+                          if (!selected) {
+                            return;
+                          }
+                          setState(
+                            () => _fieldExpectedDomain =
+                                _FieldExpectedDomain.screen,
+                          );
+                        },
+                      ),
+                      ChoiceChip(
+                        label: const Text('photo_real'),
+                        selected:
+                            _fieldExpectedDomain ==
+                            _FieldExpectedDomain.photoReal,
+                        onSelected: (selected) {
+                          if (!selected) {
+                            return;
+                          }
+                          setState(
+                            () => _fieldExpectedDomain =
+                                _FieldExpectedDomain.photoReal,
+                          );
+                        },
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 8),
+                  Text(
+                    'Attendu: classe',
+                    style: TextStyle(
+                      fontSize: 12,
+                      color: Colors.white.withValues(alpha: 0.75),
+                    ),
+                  ),
+                  const SizedBox(height: 6),
+                  Wrap(
+                    spacing: 8,
+                    runSpacing: 8,
+                    children: [
+                      ChoiceChip(
+                        label: const Text('board'),
+                        selected:
+                            _fieldExpectedClass == _FieldExpectedClass.board,
+                        onSelected: (selected) {
+                          if (!selected) {
+                            return;
+                          }
+                          setState(
+                            () =>
+                                _fieldExpectedClass = _FieldExpectedClass.board,
+                          );
+                        },
+                      ),
+                      ChoiceChip(
+                        label: const Text('no_board'),
+                        selected:
+                            _fieldExpectedClass == _FieldExpectedClass.noBoard,
+                        onSelected: (selected) {
+                          if (!selected) {
+                            return;
+                          }
+                          setState(
+                            () => _fieldExpectedClass =
+                                _FieldExpectedClass.noBoard,
+                          );
+                        },
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 10),
+                  Wrap(
+                    spacing: 8,
+                    runSpacing: 8,
+                    children: [
+                      FilledButton.icon(
+                        onPressed: _scanResult == null
+                            ? null
+                            : _recordCurrentScanToFieldProtocol,
+                        icon: const Icon(
+                          Icons.playlist_add_check_circle_outlined,
+                        ),
+                        label: const Text('Log scan courant'),
+                      ),
+                      OutlinedButton.icon(
+                        onPressed: _fieldTestEntries.isEmpty
+                            ? null
+                            : _copyFieldProtocolReport,
+                        icon: const Icon(Icons.copy_all_outlined),
+                        label: const Text('Copier report'),
+                      ),
+                      OutlinedButton.icon(
+                        onPressed: _fieldTestEntries.isEmpty
+                            ? null
+                            : _copyLatestFalsePositiveLog,
+                        icon: const Icon(Icons.warning_amber_outlined),
+                        label: const Text('Copier FP'),
+                      ),
+                      OutlinedButton.icon(
+                        onPressed: _fieldTestEntries.isEmpty
+                            ? null
+                            : _copyLatestFalseNegativeLog,
+                        icon: const Icon(Icons.error_outline),
+                        label: const Text('Copier FN'),
+                      ),
+                      OutlinedButton.icon(
+                        onPressed: _fieldTestEntries.isEmpty
+                            ? null
+                            : _clearFieldProtocolEntries,
+                        icon: const Icon(Icons.delete_outline),
+                        label: const Text('Vider'),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 8),
+                  Text(
+                    'FP=$protocolFalsePositives | FN=$protocolFalseNegatives',
+                    style: TextStyle(
+                      fontSize: 11,
+                      color: Colors.white.withValues(alpha: 0.70),
+                    ),
+                  ),
+                  if (protocolLatestLines.isNotEmpty) ...[
+                    const SizedBox(height: 8),
+                    SelectableText(
+                      protocolLatestLines.join('\n'),
+                      style: TextStyle(
+                        fontSize: 11,
+                        color: Colors.white.withValues(alpha: 0.8),
                       ),
                     ),
                   ],
@@ -2175,4 +2669,3 @@ class _ImagePreview extends StatelessWidget {
     );
   }
 }
-
