@@ -23,20 +23,32 @@ const _screenRejectThreshold = 0.57;
 const _screenOpenCvMinBoardConfidence = 0.30;
 const _screenOpenCvMinBoardConfidenceLineFallback = 0.34;
 const _screenMinPostWarpGridness = 0.11;
+const _screenGridnessRescueMinPostWarpGridness = 0.08;
 
 const _autoRoutingAmbiguousScoreDelta = 0.05;
 const _autoRoutingAlternateRetryMinScore = 0.35;
 const _alternateBypassMinBoardQuality = 0.40;
 const _alternateBypassMinBoardConfidence = 0.35;
 const _alternateBypassMinBoardAreaRatio = 0.16;
+const _gridnessRescueMinBoardQuality = 0.30;
+const _gridnessRescueMinBoardConfidence = 0.35;
+const _gridnessRescueMinBoardAreaRatio = 0.12;
+const _defaultRegressionSuite = String.fromEnvironment(
+  'REGRESSION_SUITE',
+  defaultValue: 'core',
+);
 
 void main() {
   IntegrationTestWidgetsFlutterBinding.ensureInitialized();
 
   testWidgets('regression scan runner', (tester) async {
-    final cases = await _loadCases('assets/regression/cases.json');
+    final suite = _normalizedSuiteName(_defaultRegressionSuite);
+    final casesAssetPath = suite == 'holdout'
+        ? 'assets/regression_holdout/cases.json'
+        : 'assets/regression/cases.json';
+    final cases = await _loadCases(casesAssetPath, suite: suite);
     if (cases.isEmpty) {
-      debugPrint('[regression] no cases in assets/regression/cases.json');
+      debugPrint('[regression] no cases in $casesAssetPath (suite=$suite)');
       expect(true, isTrue);
       return;
     }
@@ -75,6 +87,20 @@ void main() {
       openCvMinBoardConfidenceLineFallback:
           _screenOpenCvMinBoardConfidenceLineFallback,
       minPostWarpGridness: _screenMinPostWarpGridness,
+    );
+
+    final screenUseCaseGridnessRescue = DefaultScanPipelineFactory.create(
+      validator: validator,
+      fenBuilder: fenBuilder,
+      useBoardPresenceGate: true,
+      boardPresenceThreshold: _screenAcceptThreshold,
+      boardPresenceRejectThreshold: _screenRejectThreshold,
+      boardPresenceModelAssetPath: _screenModelAsset,
+      useFallbackForReject: false,
+      openCvMinBoardConfidence: _screenOpenCvMinBoardConfidence,
+      openCvMinBoardConfidenceLineFallback:
+          _screenOpenCvMinBoardConfidenceLineFallback,
+      minPostWarpGridness: _screenGridnessRescueMinPostWarpGridness,
     );
 
     final photoUseCaseNoGate = DefaultScanPipelineFactory.create(
@@ -152,6 +178,8 @@ void main() {
       final primaryGateRaw = _extractGateDecisionRaw(
         primaryResult.detectorDebug,
       );
+      var retries = 0;
+      const maxRetries = 2;
       final shouldRetryAlternate =
           !primaryResult.boardDetected &&
           alternateUseCase != null &&
@@ -162,9 +190,11 @@ void main() {
 
       var alternateRanWithoutGate = false;
       var switchedToAlternate = false;
+      var switchedToGridnessRescue = false;
       bool? alternateBypassQualityPass;
-      if (shouldRetryAlternate) {
+      if (shouldRetryAlternate && retries < maxRetries) {
         retryCount += 1;
+        retries += 1;
         final retryAlternateWithoutGate =
             primaryGateRaw == 'allow_strong_accept';
         final selectedAlternateUseCase = retryAlternateWithoutGate
@@ -191,15 +221,50 @@ void main() {
         }
       }
 
+      final currentGateDecisionRaw =
+          alternateRanWithoutGate && switchedToAlternate
+          ? 'bypass_no_gate'
+          : _extractGateDecisionRaw(finalResult.detectorDebug);
+      final currentFinalDecisionRaw = _extractFinalDecisionRaw(
+        finalResult.detectorDebug,
+      );
+      final shouldRetryGridnessRescue =
+          retries < maxRetries &&
+          finalDomain == 'screen' &&
+          currentFinalDecisionRaw == 'reject_post_warp_gridness' &&
+          (currentGateDecisionRaw == 'allow_strong_accept' ||
+              currentGateDecisionRaw == 'bypass_no_gate') &&
+          _passesGridnessRescuePrecheck(finalResult);
+      bool? gridnessRescueQualityPass;
+      if (shouldRetryGridnessRescue) {
+        retryCount += 1;
+        retries += 1;
+        final rescueWatch = Stopwatch()..start();
+        final rescueResult = await screenUseCaseGridnessRescue.execute(image);
+        rescueWatch.stop();
+        tAltMs += rescueWatch.elapsedMilliseconds;
+        gridnessRescueQualityPass = _passesGridnessRescuePrecheck(rescueResult);
+        if (rescueResult.boardDetected && gridnessRescueQualityPass) {
+          finalResult = rescueResult;
+          finalDomain = 'screen';
+          switchedToGridnessRescue = true;
+        }
+      }
+
       var gateRaw = _extractGateDecisionRaw(finalResult.detectorDebug);
       var finalDecisionRaw = _extractFinalDecisionRaw(
         finalResult.detectorDebug,
       );
       String? bypassReason;
-      if (alternateRanWithoutGate && switchedToAlternate) {
+      if (alternateRanWithoutGate &&
+          switchedToAlternate &&
+          !switchedToGridnessRescue) {
         gateRaw = 'bypass_no_gate';
         finalDecisionRaw = 'bypass_no_gate';
         bypassReason = 'primary_allow_strong_accept_detector_failed';
+      }
+      if (switchedToGridnessRescue) {
+        bypassReason = 'gridness_rescue_post_warp_gridness';
       }
       final decision = _decisionBucket(finalResult.detectorDebug);
       final expectedBoard = c.expectedClass == 'board';
@@ -248,6 +313,9 @@ void main() {
         't_alt_ms': tAltMs,
         'alternate_ran_without_gate': alternateRanWithoutGate,
         'alternate_bypass_quality_pass': alternateBypassQualityPass,
+        'gridness_rescue_attempted': shouldRetryGridnessRescue,
+        'gridness_rescue_quality_pass': gridnessRescueQualityPass,
+        'gridness_rescue_switched': switchedToGridnessRescue,
         'bypass_reason': bypassReason,
         'post_warp_gridness': _extractMetric(
           finalResult.detectorDebug,
@@ -292,6 +360,7 @@ void main() {
 
     final report = <String, Object?>{
       'generated_at': DateTime.now().toIso8601String(),
+      'suite': suite,
       'total': total,
       'tp': tp,
       'tn': tn,
@@ -352,7 +421,10 @@ class _RoutingResult {
   final double? alternateScore;
 }
 
-Future<List<_RegressionCase>> _loadCases(String assetPath) async {
+Future<List<_RegressionCase>> _loadCases(
+  String assetPath, {
+  required String suite,
+}) async {
   final raw = await rootBundle.loadString(assetPath);
   final decoded = jsonDecode(raw);
 
@@ -377,7 +449,7 @@ Future<List<_RegressionCase>> _loadCases(String assetPath) async {
     out.add(
       _RegressionCase(
         id: id,
-        assetPath: _resolveAssetPath(path),
+        assetPath: _resolveAssetPath(path, suite: suite),
         expectedDomain: _normalizedDomain(
           map['expected_domain']?.toString() ?? 'photo_real',
         ),
@@ -391,21 +463,25 @@ Future<List<_RegressionCase>> _loadCases(String assetPath) async {
   return out;
 }
 
-String _resolveAssetPath(String rawPath) {
+String _resolveAssetPath(String rawPath, {required String suite}) {
   final normalized = rawPath.replaceAll('\\', '/');
+  final assetRoot = suite == 'holdout'
+      ? 'assets/regression_holdout/images'
+      : 'assets/regression/images';
+  final toolRoot = suite == 'holdout'
+      ? 'tools/regression/holdout/images/'
+      : 'tools/regression/images/';
+
   if (normalized.startsWith('assets/')) {
     return normalized;
   }
-  if (normalized.startsWith('tools/regression/images/')) {
-    return normalized.replaceFirst(
-      'tools/regression/images/',
-      'assets/regression/images/',
-    );
+  if (normalized.startsWith(toolRoot)) {
+    return normalized.replaceFirst(toolRoot, '$assetRoot/');
   }
   if (normalized.startsWith('images/')) {
-    return 'assets/regression/$normalized';
+    return '$assetRoot/${normalized.substring('images/'.length)}';
   }
-  return 'assets/regression/images/$normalized';
+  return '$assetRoot/$normalized';
 }
 
 Future<Uint8List?> _loadAssetBytes(String assetPath) async {
@@ -566,6 +642,18 @@ bool _passesAlternateBypassQualityGate(ScanPipelineResult result) {
       areaRatio >= _alternateBypassMinBoardAreaRatio;
 }
 
+bool _passesGridnessRescuePrecheck(ScanPipelineResult result) {
+  final quality = _extractMetric(result.detectorDebug, 'board_quality');
+  final confidence = _extractMetric(result.detectorDebug, 'board_confidence');
+  final areaRatio = _extractMetric(result.detectorDebug, 'board_area_ratio');
+  if (quality == null || confidence == null || areaRatio == null) {
+    return false;
+  }
+  return quality >= _gridnessRescueMinBoardQuality &&
+      confidence >= _gridnessRescueMinBoardConfidence &&
+      areaRatio >= _gridnessRescueMinBoardAreaRatio;
+}
+
 String _extractGateDecisionRaw(String detectorDebug) {
   final match = RegExp(r'decision=([a-z_]+)').firstMatch(detectorDebug);
   if (match == null || match.groupCount < 1) {
@@ -614,6 +702,16 @@ String _extractWhichPath(String detectorDebug) {
     return 'unknown';
   }
   return match.group(1)!;
+}
+
+String _normalizedSuiteName(String raw) {
+  switch (raw) {
+    case 'holdout':
+      return 'holdout';
+    case 'core':
+    default:
+      return 'core';
+  }
 }
 
 String _normalizedDomain(String raw) {
