@@ -57,8 +57,12 @@ class _FieldTestEntry {
     required this.timestamp,
     required this.expectedDomain,
     required this.expectedClass,
+    required this.tPrimaryMs,
+    required this.tAltMs,
+    required this.acquisitionSource,
     required this.chosenDomain,
     required this.decision,
+    required this.gateDecisionRaw,
     required this.boardDetected,
     required this.routingDebug,
     required this.detectorDebug,
@@ -69,8 +73,12 @@ class _FieldTestEntry {
   final DateTime timestamp;
   final _FieldExpectedDomain expectedDomain;
   final _FieldExpectedClass expectedClass;
+  final int tPrimaryMs;
+  final int tAltMs;
+  final String acquisitionSource;
   final _ScanCaptureDomain chosenDomain;
   final String decision; // reject | gray | accept
+  final String gateDecisionRaw; // reject_strong_no_board | allow_* | unknown
   final bool boardDetected;
   final String routingDebug;
   final String detectorDebug;
@@ -82,8 +90,12 @@ class _FieldTestEntry {
       'timestamp': timestamp.toIso8601String(),
       'expectedDomain': expectedDomain.name,
       'expectedClass': expectedClass.name,
+      'tPrimaryMs': tPrimaryMs,
+      'tAltMs': tAltMs,
+      'acquisitionSource': acquisitionSource,
       'chosenDomain': chosenDomain.name,
       'decision': decision,
+      'gateDecisionRaw': gateDecisionRaw,
       'boardDetected': boardDetected,
       'routingDebug': routingDebug,
       'detectorDebug': detectorDebug,
@@ -125,8 +137,12 @@ class _FieldTestEntry {
       timestamp: timestamp,
       expectedDomain: expectedDomain,
       expectedClass: expectedClass,
+      tPrimaryMs: (json['tPrimaryMs'] as num?)?.toInt() ?? 0,
+      tAltMs: (json['tAltMs'] as num?)?.toInt() ?? 0,
+      acquisitionSource: json['acquisitionSource']?.toString() ?? 'unknown',
       chosenDomain: chosenDomain,
       decision: json['decision']?.toString() ?? 'gray',
+      gateDecisionRaw: json['gateDecisionRaw']?.toString() ?? 'unknown',
       boardDetected: json['boardDetected'] == true,
       routingDebug: json['routingDebug']?.toString() ?? '',
       detectorDebug: json['detectorDebug']?.toString() ?? '',
@@ -157,6 +173,7 @@ class _ScanPageState extends State<ScanPage> {
   static const double _screenLooseOpenCvMinBoardConfidenceLineFallback = 0.24;
   static const double _screenMinPostWarpGridness = 0.11;
   static const double _autoRoutingAmbiguousScoreDelta = 0.05;
+  static const double _autoRoutingAlternateRetryMinScore = 0.35;
   static const int _fieldProtocolBucketTarget = 10;
   static const int _fieldProtocolTotalTarget = 40;
   static const String _photoBoardModelAssetPath =
@@ -207,6 +224,8 @@ class _ScanPageState extends State<ScanPage> {
   String _routingDebugLabel = 'mode=auto';
   int _autoRouteScanCount = 0;
   int _autoRouteRetryCount = 0;
+  int _lastScanPrimaryMs = 0;
+  int _lastScanAltMs = 0;
   bool _selectedImageHasExif = false;
   bool _selectedImageLooksScreenshot = false;
   final Map<String, int> _gateDecisionCounters = <String, int>{
@@ -307,7 +326,6 @@ class _ScanPageState extends State<ScanPage> {
       final hasExif = _hasExifMetadata(bytes);
       final looksScreenshot = _looksLikeScreenshotPath(file.path);
       final captureDomain = _resolveCaptureDomain(
-        source: source,
         hasExif: hasExif,
         looksScreenshot: looksScreenshot,
       );
@@ -327,6 +345,8 @@ class _ScanPageState extends State<ScanPage> {
         _editablePosition = null;
         _finalFen = null;
         _errorMessage = null;
+        _lastScanPrimaryMs = 0;
+        _lastScanAltMs = 0;
         _selectedImageSize = null;
         _manualCorners = const <BoardCorner>[];
       });
@@ -354,45 +374,58 @@ class _ScanPageState extends State<ScanPage> {
       final routing = await _resolveRoutingForScan(image);
       var resolvedDomain = routing.domain;
       final allowScreenLooseRetry = !routing.isAuto;
+      final primaryStopwatch = Stopwatch()..start();
       var result = await _scanWithDomain(
         domain: resolvedDomain,
         image: image,
         allowScreenLooseRetry: allowScreenLooseRetry,
       );
+      primaryStopwatch.stop();
+      final primaryScanMs = primaryStopwatch.elapsedMilliseconds;
+      var alternateScanMs = 0;
       var routingDebug = routing.reason;
 
       var retries = 0;
       const maxRetries = 1;
       final shouldRetryAlternate =
           routing.isAuto &&
-          routing.ambiguous &&
           !result.boardDetected &&
-          routing.selectedScore != null &&
-          routing.selectedScore! >= 0.0 &&
-          routing.alternateDomain != null;
+          routing.alternateDomain != null &&
+          (routing.ambiguous ||
+              ((routing.alternateScore ?? double.negativeInfinity) >=
+                  _autoRoutingAlternateRetryMinScore));
       if (shouldRetryAlternate && retries < maxRetries) {
         retries += 1;
         final alternateDomain = routing.alternateDomain!;
+        final alternateStopwatch = Stopwatch()..start();
         final alternateResult = await _scanWithDomain(
           domain: alternateDomain,
           image: image,
           allowScreenLooseRetry: false,
         );
-        final switched = alternateResult.boardDetected && !result.boardDetected;
+        alternateStopwatch.stop();
+        alternateScanMs = alternateStopwatch.elapsedMilliseconds;
+        final switched = _shouldSwitchToAlternateResult(
+          primary: result,
+          alternate: alternateResult,
+        );
         if (switched) {
           result = alternateResult;
           resolvedDomain = alternateDomain;
         }
         routingDebug =
             '$routingDebug retry_alt=${_captureDomainLabel(alternateDomain)} '
+            'alt_score=${_fmtRoutingNumber(routing.alternateScore)} '
+            'retry_threshold=${_autoRoutingAlternateRetryMinScore.toStringAsFixed(3)} '
             'retry_count=$retries/$maxRetries '
-            'switched=$switched alt_board=${alternateResult.boardDetected}';
+            'switched=$switched alt_board=${alternateResult.boardDetected} '
+            't_primary_ms=$primaryScanMs t_alt_ms=$alternateScanMs';
       }
 
       if (kDebugMode) {
         debugPrint(
           '[scan][auto-route] chosen=${_captureDomainLabel(resolvedDomain)} '
-          '$routingDebug',
+          '$routingDebug t_primary_ms=$primaryScanMs t_alt_ms=$alternateScanMs',
         );
       }
 
@@ -403,6 +436,8 @@ class _ScanPageState extends State<ScanPage> {
         _selectedCaptureDomain = resolvedDomain;
         _routingDebugLabel = routingDebug;
         _scanResult = result;
+        _lastScanPrimaryMs = primaryScanMs;
+        _lastScanAltMs = alternateScanMs;
         _editablePosition = result.detectedPosition;
         _recordGateDecision(result.detectorDebug);
         if (routing.isAuto) {
@@ -443,7 +478,6 @@ class _ScanPageState extends State<ScanPage> {
     ScanInputImage image,
   ) async {
     final hintedDomain = _resolveCaptureDomain(
-      source: _selectedImageSource,
       hasExif: _selectedImageHasExif,
       looksScreenshot: _selectedImageLooksScreenshot,
     );
@@ -657,28 +691,63 @@ class _ScanPageState extends State<ScanPage> {
     return allowed == null ? 'unknown' : allowed.toString();
   }
 
+  bool _shouldSwitchToAlternateResult({
+    required ScanPipelineResult primary,
+    required ScanPipelineResult alternate,
+  }) {
+    if (alternate.boardDetected && !primary.boardDetected) {
+      return true;
+    }
+    if (!alternate.boardDetected || !primary.boardDetected) {
+      return false;
+    }
+    final primaryQuality = _extractBoardQuality(primary.detectorDebug);
+    final alternateQuality = _extractBoardQuality(alternate.detectorDebug);
+    if (primaryQuality != null && alternateQuality != null) {
+      if (alternateQuality > primaryQuality) {
+        return true;
+      }
+      if (alternateQuality < primaryQuality) {
+        return false;
+      }
+    }
+    final primaryConfidence = _extractBoardConfidence(primary.detectorDebug);
+    final alternateConfidence = _extractBoardConfidence(
+      alternate.detectorDebug,
+    );
+    if (primaryConfidence != null && alternateConfidence != null) {
+      return alternateConfidence > primaryConfidence;
+    }
+    return false;
+  }
+
+  double? _extractBoardQuality(String detectorDebug) {
+    return _extractDetectorMetric(detectorDebug, 'board_quality');
+  }
+
+  double? _extractBoardConfidence(String detectorDebug) {
+    return _extractDetectorMetric(detectorDebug, 'board_confidence');
+  }
+
+  double? _extractDetectorMetric(String detectorDebug, String key) {
+    final match = RegExp(
+      '$key=([-+]?\\d+(?:\\.\\d+)?)',
+    ).firstMatch(detectorDebug);
+    if (match == null || match.groupCount < 1) {
+      return null;
+    }
+    return double.tryParse(match.group(1)!);
+  }
+
   bool _isGateFinalMismatch(ScanPipelineResult result) {
     final allowed = _extractGateAllowed(result.detectorDebug);
     return allowed != null && allowed != result.boardDetected;
   }
 
   _ScanCaptureDomain _resolveCaptureDomain({
-    required ImageSource? source,
     required bool hasExif,
     required bool looksScreenshot,
   }) {
-    if (source == ImageSource.camera) {
-      return _ScanCaptureDomain.photoReal;
-    }
-    if (source == ImageSource.gallery) {
-      if (looksScreenshot) {
-        return _ScanCaptureDomain.screen;
-      }
-      if (hasExif) {
-        return _ScanCaptureDomain.photoReal;
-      }
-      return _ScanCaptureDomain.screen;
-    }
     if (looksScreenshot) {
       return _ScanCaptureDomain.screen;
     }
@@ -750,6 +819,14 @@ class _ScanPageState extends State<ScanPage> {
     }
   }
 
+  String _gateDecisionRawFromDetectorDebug(String detectorDebug) {
+    final match = RegExp(r'decision=([a-z_]+)').firstMatch(detectorDebug);
+    if (match == null || match.groupCount < 1) {
+      return 'unknown';
+    }
+    return match.group(1)!;
+  }
+
   _FieldExpectedDomain _normalizedFieldDomain(_ScanCaptureDomain domain) {
     if (domain == _ScanCaptureDomain.screen) {
       return _FieldExpectedDomain.screen;
@@ -818,7 +895,10 @@ class _ScanPageState extends State<ScanPage> {
         '${_fieldExpectedDomainLabel(entry.expectedDomain)}/${_fieldExpectedClassLabel(entry.expectedClass)}';
     return '#${entry.index} '
         'exp=$expected '
+        'src=${entry.acquisitionSource} '
         'chosen=${_captureDomainLabel(entry.chosenDomain)} '
+        'gate_raw=${entry.gateDecisionRaw} '
+        't_ms=${entry.tPrimaryMs}+${entry.tAltMs} '
         'decision=${entry.decision} '
         'board=${entry.boardDetected} '
         'outcome=${_fieldOutcomeLabel(entry)}';
@@ -842,8 +922,14 @@ class _ScanPageState extends State<ScanPage> {
           timestamp: DateTime.now(),
           expectedDomain: _fieldExpectedDomain,
           expectedClass: _fieldExpectedClass,
+          tPrimaryMs: _lastScanPrimaryMs,
+          tAltMs: _lastScanAltMs,
+          acquisitionSource: _selectedImageSourceLabel(),
           chosenDomain: _selectedCaptureDomain,
           decision: _decisionLabelFromDetectorDebug(result.detectorDebug),
+          gateDecisionRaw: _gateDecisionRawFromDetectorDebug(
+            result.detectorDebug,
+          ),
           boardDetected: result.boardDetected,
           routingDebug: _routingDebugLabel,
           detectorDebug: result.detectorDebug,
@@ -987,8 +1073,11 @@ class _ScanPageState extends State<ScanPage> {
           _normalizedFieldDomain(entry.chosenDomain) == entry.expectedDomain;
       lines.add(
         '#${entry.index} t=${entry.timestamp.toIso8601String()} '
-        'expected=${expectedDomain}/${expectedClass} '
-        'chosen=${chosenDomain} route_match=$routeMatch '
+        'expected=$expectedDomain/$expectedClass '
+        'source=${entry.acquisitionSource} '
+        'chosen=$chosenDomain route_match=$routeMatch '
+        'gate_decision_raw=${entry.gateDecisionRaw} '
+        't_primary_ms=${entry.tPrimaryMs} t_alt_ms=${entry.tAltMs} '
         'decision=${entry.decision} boardDetected=${entry.boardDetected} '
         'outcome=${_fieldOutcomeLabel(entry)}',
       );
@@ -1036,7 +1125,11 @@ class _ScanPageState extends State<ScanPage> {
       'timestamp=${entry.timestamp.toIso8601String()}',
       'expected_domain=$expectedDomain',
       'expected_class=$expectedClass',
+      'acquisition_source=${entry.acquisitionSource}',
       'chosen_domain=${_captureDomainLabel(entry.chosenDomain)}',
+      'gate_decision_raw=${entry.gateDecisionRaw}',
+      't_primary_ms=${entry.tPrimaryMs}',
+      't_alt_ms=${entry.tAltMs}',
       'decision=${entry.decision}',
       'boardDetected=${entry.boardDetected}',
       'routing_debug=${entry.routingDebug}',
@@ -1373,7 +1466,6 @@ class _ScanPageState extends State<ScanPage> {
       _selectedImage = image;
       _selectedImageSource = null;
       _selectedCaptureDomain = _resolveCaptureDomain(
-        source: null,
         hasExif: inferredHasExif,
         looksScreenshot: inferredLooksScreenshot,
       );
@@ -1383,6 +1475,8 @@ class _ScanPageState extends State<ScanPage> {
       _selectedImageHasExif = inferredHasExif;
       _selectedImageLooksScreenshot = inferredLooksScreenshot;
       _scanResult = evaluation.result;
+      _lastScanPrimaryMs = 0;
+      _lastScanAltMs = 0;
       _editablePosition = evaluation.result?.detectedPosition;
       _selectedImageSize = null;
       _manualCorners = const <BoardCorner>[];
