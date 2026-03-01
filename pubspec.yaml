@@ -72,6 +72,7 @@ flutter:
     - assets/scan_samples/
     - assets/regression/
     - assets/scan_samples/images/
+    - assets/regression/images/
     - assets/scan_models/
 
   # An image asset can refer to one or more resolution-specific "variants", see

@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:io';
 
 import 'package:chess_prodigy/scan/data/services/basic_fen_builder.dart';
 import 'package:chess_prodigy/scan/data/services/basic_position_validator.dart';
@@ -25,6 +26,9 @@ const _screenMinPostWarpGridness = 0.11;
 
 const _autoRoutingAmbiguousScoreDelta = 0.05;
 const _autoRoutingAlternateRetryMinScore = 0.35;
+const _alternateBypassMinBoardQuality = 0.40;
+const _alternateBypassMinBoardConfidence = 0.35;
+const _alternateBypassMinBoardAreaRatio = 0.16;
 
 void main() {
   IntegrationTestWidgetsFlutterBinding.ensureInitialized();
@@ -73,6 +77,22 @@ void main() {
       minPostWarpGridness: _screenMinPostWarpGridness,
     );
 
+    final photoUseCaseNoGate = DefaultScanPipelineFactory.create(
+      validator: validator,
+      fenBuilder: fenBuilder,
+      useBoardPresenceGate: false,
+    );
+
+    final screenUseCaseNoGate = DefaultScanPipelineFactory.create(
+      validator: validator,
+      fenBuilder: fenBuilder,
+      useBoardPresenceGate: false,
+      openCvMinBoardConfidence: _screenOpenCvMinBoardConfidence,
+      openCvMinBoardConfidenceLineFallback:
+          _screenOpenCvMinBoardConfidenceLineFallback,
+      minPostWarpGridness: _screenMinPostWarpGridness,
+    );
+
     final entries = <Map<String, Object?>>[];
     var tp = 0;
     var tn = 0;
@@ -93,7 +113,12 @@ void main() {
         continue;
       }
 
-      final image = ScanInputImage(path: c.assetPath, bytes: imageBytes);
+      final tempPath = await _materializeTempImage(
+        id: c.id,
+        originalAssetPath: c.assetPath,
+        bytes: imageBytes,
+      );
+      final image = ScanInputImage(path: tempPath, bytes: imageBytes);
 
       final routing = await _resolveRouting(
         image: image,
@@ -109,6 +134,11 @@ void main() {
           : (routing.alternateDomain == 'screen'
                 ? screenUseCase
                 : photoUseCase);
+      final alternateUseCaseNoGate = routing.alternateDomain == null
+          ? null
+          : (routing.alternateDomain == 'screen'
+                ? screenUseCaseNoGate
+                : photoUseCaseNoGate);
 
       final primaryWatch = Stopwatch()..start();
       var primaryResult = await primaryUseCase.execute(image);
@@ -119,31 +149,58 @@ void main() {
       var finalDomain = routing.domain;
       var tAltMs = 0;
 
+      final primaryGateRaw = _extractGateDecisionRaw(
+        primaryResult.detectorDebug,
+      );
       final shouldRetryAlternate =
           !primaryResult.boardDetected &&
           alternateUseCase != null &&
           (routing.ambiguous ||
               ((routing.alternateScore ?? double.negativeInfinity) >=
-                  _autoRoutingAlternateRetryMinScore));
+                  _autoRoutingAlternateRetryMinScore) ||
+              primaryGateRaw == 'allow_strong_accept');
 
+      var alternateRanWithoutGate = false;
+      var switchedToAlternate = false;
+      bool? alternateBypassQualityPass;
       if (shouldRetryAlternate) {
         retryCount += 1;
+        final retryAlternateWithoutGate =
+            primaryGateRaw == 'allow_strong_accept';
+        final selectedAlternateUseCase = retryAlternateWithoutGate
+            ? alternateUseCaseNoGate!
+            : alternateUseCase;
+        alternateRanWithoutGate = retryAlternateWithoutGate;
         final altWatch = Stopwatch()..start();
-        final alternateResult = await alternateUseCase.execute(image);
+        final alternateResult = await selectedAlternateUseCase.execute(image);
         altWatch.stop();
         tAltMs = altWatch.elapsedMilliseconds;
 
+        alternateBypassQualityPass =
+            !retryAlternateWithoutGate ||
+            _passesAlternateBypassQualityGate(alternateResult);
         final switched = _shouldSwitchToAlternateResult(
           primary: primaryResult,
           alternate: alternateResult,
+          requireBypassQualityGate: retryAlternateWithoutGate,
         );
         if (switched) {
           finalResult = alternateResult;
           finalDomain = routing.alternateDomain!;
+          switchedToAlternate = true;
         }
       }
 
-      final gateRaw = _extractDecisionRaw(finalResult.detectorDebug);
+      var gateRaw = _extractGateDecisionRaw(finalResult.detectorDebug);
+      var finalDecisionRaw = _extractFinalDecisionRaw(
+        finalResult.detectorDebug,
+      );
+      String? bypassReason;
+      if (alternateRanWithoutGate && switchedToAlternate) {
+        gateRaw = 'bypass_no_gate';
+        finalDecisionRaw = 'bypass_no_gate';
+        bypassReason = 'primary_allow_strong_accept_detector_failed';
+      }
       final decision = _decisionBucket(finalResult.detectorDebug);
       final expectedBoard = c.expectedClass == 'board';
       final boardDetected = finalResult.boardDetected;
@@ -170,6 +227,7 @@ void main() {
       final entry = <String, Object?>{
         'id': c.id,
         'asset_path': c.assetPath,
+        'temp_path': tempPath,
         'expected_domain': c.expectedDomain,
         'expected_class': c.expectedClass,
         'acquisition': c.acquisition,
@@ -182,11 +240,26 @@ void main() {
         'delta': routing.delta,
         'ambiguous': routing.ambiguous,
         'gate_decision_raw': gateRaw,
+        'final_decision_raw': finalDecisionRaw,
         'decision': decision,
         'board_detected': boardDetected,
         'outcome': outcome,
         't_primary_ms': tPrimaryMs,
         't_alt_ms': tAltMs,
+        'alternate_ran_without_gate': alternateRanWithoutGate,
+        'alternate_bypass_quality_pass': alternateBypassQualityPass,
+        'bypass_reason': bypassReason,
+        'post_warp_gridness': _extractMetric(
+          finalResult.detectorDebug,
+          'post_warp_gridness',
+        ),
+        'min_post_warp_gridness': _extractMetric(
+          finalResult.detectorDebug,
+          'min_post_warp_gridness',
+        ),
+        'rejected_post_warp_gridness': finalResult.detectorDebug.contains(
+          'decision=reject_post_warp_gridness',
+        ),
         'board_quality': _extractMetric(
           finalResult.detectorDebug,
           'board_quality',
@@ -344,6 +417,24 @@ Future<Uint8List?> _loadAssetBytes(String assetPath) async {
   }
 }
 
+Future<String> _materializeTempImage({
+  required String id,
+  required String originalAssetPath,
+  required Uint8List bytes,
+}) async {
+  final lower = originalAssetPath.toLowerCase();
+  final extension = lower.endsWith('.png')
+      ? '.png'
+      : (lower.endsWith('.jpg') || lower.endsWith('.jpeg'))
+      ? '.jpg'
+      : lower.endsWith('.webp')
+      ? '.webp'
+      : '.img';
+  final file = File('${Directory.systemTemp.path}/reg_scan_$id$extension');
+  await file.writeAsBytes(bytes, flush: true);
+  return file.path;
+}
+
 Future<_RoutingResult> _resolveRouting({
   required ScanInputImage image,
   required BoardPresenceClassifier screenGate,
@@ -412,14 +503,21 @@ double? _scoreForRouting({
   if (!prediction.isAvailable) {
     return null;
   }
-  final strongProbability = prediction.probability.clamp(0.0, 1.0).toDouble();
-  return strongProbability - rejectThreshold;
+  final routingProbability = prediction.fallbackOrProbability
+      .clamp(0.0, 1.0)
+      .toDouble();
+  return routingProbability - rejectThreshold;
 }
 
 bool _shouldSwitchToAlternateResult({
   required ScanPipelineResult primary,
   required ScanPipelineResult alternate,
+  bool requireBypassQualityGate = false,
 }) {
+  if (requireBypassQualityGate &&
+      !_passesAlternateBypassQualityGate(alternate)) {
+    return false;
+  }
   if (alternate.boardDetected && !primary.boardDetected) {
     return true;
   }
@@ -453,12 +551,37 @@ bool _shouldSwitchToAlternateResult({
   return false;
 }
 
-String _extractDecisionRaw(String detectorDebug) {
+bool _passesAlternateBypassQualityGate(ScanPipelineResult result) {
+  if (!result.boardDetected) {
+    return false;
+  }
+  final quality = _extractMetric(result.detectorDebug, 'board_quality');
+  final confidence = _extractMetric(result.detectorDebug, 'board_confidence');
+  final areaRatio = _extractMetric(result.detectorDebug, 'board_area_ratio');
+  if (quality == null || confidence == null || areaRatio == null) {
+    return false;
+  }
+  return quality >= _alternateBypassMinBoardQuality &&
+      confidence >= _alternateBypassMinBoardConfidence &&
+      areaRatio >= _alternateBypassMinBoardAreaRatio;
+}
+
+String _extractGateDecisionRaw(String detectorDebug) {
   final match = RegExp(r'decision=([a-z_]+)').firstMatch(detectorDebug);
   if (match == null || match.groupCount < 1) {
     return 'unknown';
   }
   return match.group(1)!;
+}
+
+String _extractFinalDecisionRaw(String detectorDebug) {
+  final allMatches = RegExp(
+    r'decision=([a-z_]+)',
+  ).allMatches(detectorDebug).toList(growable: false);
+  if (allMatches.isEmpty || allMatches.last.groupCount < 1) {
+    return 'unknown';
+  }
+  return allMatches.last.group(1)!;
 }
 
 String _decisionBucket(String detectorDebug) {

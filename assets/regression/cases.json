@@ -1,6 +1,21 @@
 {
     "version":  1,
     "cases":  [
-
+                  {
+                      "id":  "fp_001",
+                      "path":  "assets/regression/images/fp_001.webp",
+                      "expected_domain":  "photo_real",
+                      "expected_class":  "no_board",
+                      "acquisition":  "gallery",
+                      "notes":  "candidate_fp"
+                  },
+                  {
+                      "id":  "fn_001",
+                      "path":  "assets/regression/images/fn_001.webp",
+                      "expected_domain":  "photo_real",
+                      "expected_class":  "board",
+                      "acquisition":  "camera",
+                      "notes":  "candidate_fn"
+                  }
               ]
 }

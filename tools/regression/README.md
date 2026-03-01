@@ -8,6 +8,7 @@ This folder stores a fixed mini regression set for scan tuning.
 - `tools/regression/cases.json`: source-of-truth case list
 - `tools/regression/parse_report.ps1`: parse copied field report text
 - `assets/regression/`: runtime copy used by integration tests
+- `assets/regression/images/`: image assets consumed by `rootBundle`
 
 ## Case format
 
@@ -88,7 +89,7 @@ flutter test integration_test -d <device-id>
 For representative timings/jank, run with `flutter drive` in profile mode:
 
 ```powershell
-flutter drive --driver=test_driver/integration_test.dart --target=integration_test/regression_scan_test.dart -d <device-id> --profile --no-dds
+flutter drive --driver=test_driver/perf_driver.dart --target=integration_test/regression_scan_test.dart -d <device-id> --profile --no-dds
 ```
 
 Then open DevTools Performance/Timeline during the run.
