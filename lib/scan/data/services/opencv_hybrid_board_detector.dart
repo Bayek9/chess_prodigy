@@ -145,6 +145,7 @@ class OpenCvHybridBoardDetector implements BoardDetector {
         quality: quality,
         confidence: confidence,
         lineFallbackAccepted: false,
+        forcedProfileAccepted: false,
         sideBalance: sideBalance,
       );
       final areaRatio =
@@ -555,6 +556,7 @@ class OpenCvHybridBoardDetector implements BoardDetector {
       quality: finalQualityNow,
       confidence: finalConfidence,
       lineFallbackAccepted: lineFallbackAccepted,
+      forcedProfileAccepted: forcedProfileAccepted,
       sideBalance: finalSideBalance,
     )) {
       rejectedNoBoard = true;
@@ -890,6 +892,7 @@ class OpenCvHybridBoardDetector implements BoardDetector {
     required _GeometryQualitySummary quality,
     required double confidence,
     required bool lineFallbackAccepted,
+    required bool forcedProfileAccepted,
     required double sideBalance,
   }) {
     if (!geometry.isValid || geometry.corners.length != 4) {
@@ -898,7 +901,12 @@ class OpenCvHybridBoardDetector implements BoardDetector {
     final areaRatio =
         _quadArea(geometry.corners) /
         math.max(1.0, (decoded.width * decoded.height).toDouble());
-    if (areaRatio < 0.05 || areaRatio > 0.88) {
+    if (areaRatio < 0.05) {
+      return false;
+    }
+    if (areaRatio > 0.95 &&
+        quality.checker < 0.22 &&
+        quality.edgeFrame < 0.55) {
       return false;
     }
     final minConfidence = lineFallbackAccepted
@@ -923,6 +931,9 @@ class OpenCvHybridBoardDetector implements BoardDetector {
         quality.regularity < 0.36) {
       return false;
     }
+    if (lineFallbackAccepted && areaRatio < 0.08) {
+      return false;
+    }
     // Partial-board rejection for line-fallback candidates: large coverage
     // with weak checker parity tends to be demi-board false positives.
     if (lineFallbackAccepted && quality.checker < 0.17 && areaRatio > 0.22) {
@@ -930,6 +941,11 @@ class OpenCvHybridBoardDetector implements BoardDetector {
     }
     // Anti-FP guard for line-fallback on small, weak-structure quads.
     if (lineFallbackAccepted && areaRatio < 0.16 && quality.edgeFrame < 0.60) {
+      return false;
+    }
+    if (forcedProfileAccepted &&
+        confidence < 0.30 &&
+        quality.edgeFrame < 0.60) {
       return false;
     }
     // Partial-board rejection: one side much weaker than others on warp.

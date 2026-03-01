@@ -192,11 +192,15 @@ class _ScanPageState extends State<ScanPage> {
   static const double _screenLooseOpenCvMinBoardConfidence = 0.20;
   static const double _screenLooseOpenCvMinBoardConfidenceLineFallback = 0.24;
   static const double _screenMinPostWarpGridness = 0.11;
+  static const double _screenGridnessRescueMinPostWarpGridness = 0.08;
   static const double _autoRoutingAmbiguousScoreDelta = 0.05;
   static const double _autoRoutingAlternateRetryMinScore = 0.35;
   static const double _alternateBypassMinBoardQuality = 0.40;
   static const double _alternateBypassMinBoardConfidence = 0.35;
   static const double _alternateBypassMinBoardAreaRatio = 0.16;
+  static const double _gridnessRescueMinBoardQuality = 0.30;
+  static const double _gridnessRescueMinBoardConfidence = 0.35;
+  static const double _gridnessRescueMinBoardAreaRatio = 0.12;
   static const int _fieldProtocolBucketTarget = 10;
   static const int _fieldProtocolTotalTarget = 40;
   static const String _photoBoardModelAssetPath =
@@ -216,6 +220,7 @@ class _ScanPageState extends State<ScanPage> {
   late final ScanPositionUseCase _scanUseCasePhotoReal;
   late final ScanPositionUseCase _scanUseCaseScreen;
   late final ScanPositionUseCase _scanUseCaseScreenLoose;
+  late final ScanPositionUseCase _scanUseCaseScreenGridnessRescue;
   late final ScanPositionUseCase _scanUseCasePhotoRealNoGate;
   late final ScanPositionUseCase _scanUseCaseScreenNoGate;
   late final ScanPositionUseCase _datasetScanUseCase;
@@ -314,6 +319,19 @@ class _ScanPageState extends State<ScanPage> {
       openCvMinBoardConfidenceLineFallback:
           _screenLooseOpenCvMinBoardConfidenceLineFallback,
       minPostWarpGridness: _screenMinPostWarpGridness,
+    );
+    _scanUseCaseScreenGridnessRescue = DefaultScanPipelineFactory.create(
+      validator: _validator,
+      fenBuilder: _fenBuilder,
+      useBoardPresenceGate: true,
+      boardPresenceThreshold: _screenAcceptThreshold,
+      boardPresenceRejectThreshold: _screenRejectThreshold,
+      boardPresenceModelAssetPath: _screenBoardModelAssetPath,
+      useFallbackForReject: false,
+      openCvMinBoardConfidence: _screenOpenCvMinBoardConfidence,
+      openCvMinBoardConfidenceLineFallback:
+          _screenOpenCvMinBoardConfidenceLineFallback,
+      minPostWarpGridness: _screenGridnessRescueMinPostWarpGridness,
     );
     _scanUseCasePhotoRealNoGate = DefaultScanPipelineFactory.create(
       validator: _validator,
@@ -434,7 +452,7 @@ class _ScanPageState extends State<ScanPage> {
       var routingDebug = routing.reason;
 
       var retries = 0;
-      const maxRetries = 1;
+      const maxRetries = 2;
       final shouldRetryAlternate =
           routing.isAuto &&
           !result.boardDetected &&
@@ -444,6 +462,7 @@ class _ScanPageState extends State<ScanPage> {
                   _autoRoutingAlternateRetryMinScore) ||
               primaryGateRaw == 'allow_strong_accept');
       var finalUsedBypassNoGate = false;
+      var usedGridnessRescue = false;
       String? bypassReason;
       if (shouldRetryAlternate && retries < maxRetries) {
         retries += 1;
@@ -487,13 +506,53 @@ class _ScanPageState extends State<ScanPage> {
             't_primary_ms=$primaryScanMs t_alt_ms=$alternateScanMs';
       }
 
+      final currentGateDecisionRaw = finalUsedBypassNoGate
+          ? 'bypass_no_gate'
+          : _gateDecisionRawFromDetectorDebug(result.detectorDebug);
+      final currentFinalDecisionRaw = _finalDecisionRawFromDetectorDebug(
+        result.detectorDebug,
+      );
+      final shouldRetryGridnessRescue =
+          retries < maxRetries &&
+          resolvedDomain == _ScanCaptureDomain.screen &&
+          currentFinalDecisionRaw == 'reject_post_warp_gridness' &&
+          (currentGateDecisionRaw == 'allow_strong_accept' ||
+              currentGateDecisionRaw == 'bypass_no_gate') &&
+          _passesGridnessRescuePrecheck(result);
+      if (shouldRetryGridnessRescue) {
+        retries += 1;
+        final rescueStopwatch = Stopwatch()..start();
+        final rescueResult = await _scanUseCaseScreenGridnessRescue.execute(
+          image,
+        );
+        rescueStopwatch.stop();
+        final rescueMs = rescueStopwatch.elapsedMilliseconds;
+        alternateScanMs += rescueMs;
+        final rescueQualityPass = _passesGridnessRescuePrecheck(rescueResult);
+        final rescueSwitched = rescueResult.boardDetected && rescueQualityPass;
+        if (rescueSwitched) {
+          result = rescueResult;
+          usedGridnessRescue = true;
+          finalUsedBypassNoGate = false;
+          bypassReason = 'gridness_rescue_post_warp_gridness';
+        }
+        routingDebug =
+            '$routingDebug gridness_rescue=true '
+            'gridness_min=${_screenGridnessRescueMinPostWarpGridness.toStringAsFixed(3)} '
+            'rescue_switched=$rescueSwitched '
+            'rescue_quality_pass=$rescueQualityPass '
+            'rescue_board=${rescueResult.boardDetected} '
+            'rescue_ms=$rescueMs '
+            'retry_count=$retries/$maxRetries';
+      }
+
       var reportedGateDecisionRaw = _gateDecisionRawFromDetectorDebug(
         result.detectorDebug,
       );
       var reportedFinalDecisionRaw = _finalDecisionRawFromDetectorDebug(
         result.detectorDebug,
       );
-      if (finalUsedBypassNoGate) {
+      if (finalUsedBypassNoGate && !usedGridnessRescue) {
         reportedGateDecisionRaw = 'bypass_no_gate';
         reportedFinalDecisionRaw = 'bypass_no_gate';
       }
@@ -521,7 +580,7 @@ class _ScanPageState extends State<ScanPage> {
         _recordGateDecision(result.detectorDebug);
         if (routing.isAuto) {
           _autoRouteScanCount += 1;
-          if (shouldRetryAlternate) {
+          if (retries > 0) {
             _autoRouteRetryCount += 1;
           }
         }
@@ -827,6 +886,21 @@ class _ScanPageState extends State<ScanPage> {
     return quality >= _alternateBypassMinBoardQuality &&
         confidence >= _alternateBypassMinBoardConfidence &&
         areaRatio >= _alternateBypassMinBoardAreaRatio;
+  }
+
+  bool _passesGridnessRescuePrecheck(ScanPipelineResult result) {
+    final quality = _extractBoardQuality(result.detectorDebug);
+    final confidence = _extractBoardConfidence(result.detectorDebug);
+    final areaRatio = _extractDetectorMetric(
+      result.detectorDebug,
+      'board_area_ratio',
+    );
+    if (quality == null || confidence == null || areaRatio == null) {
+      return false;
+    }
+    return quality >= _gridnessRescueMinBoardQuality &&
+        confidence >= _gridnessRescueMinBoardConfidence &&
+        areaRatio >= _gridnessRescueMinBoardAreaRatio;
   }
 
   double? _extractBoardQuality(String detectorDebug) {
