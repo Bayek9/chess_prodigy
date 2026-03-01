@@ -928,6 +928,10 @@ class OpenCvHybridBoardDetector implements BoardDetector {
     if (lineFallbackAccepted && quality.checker < 0.17 && areaRatio > 0.22) {
       return false;
     }
+    // Anti-FP guard for line-fallback on small, weak-structure quads.
+    if (lineFallbackAccepted && areaRatio < 0.16 && quality.edgeFrame < 0.60) {
+      return false;
+    }
     // Partial-board rejection: one side much weaker than others on warp.
     if (confidence < 0.33 && sideBalance < 0.16) {
       return false;

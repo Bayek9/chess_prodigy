@@ -63,7 +63,12 @@ class _FieldTestEntry {
     required this.chosenDomain,
     required this.decision,
     required this.gateDecisionRaw,
+    required this.finalDecisionRaw,
     required this.boardDetected,
+    required this.postWarpGridness,
+    required this.minPostWarpGridness,
+    required this.rejectedPostWarpGridness,
+    this.bypassReason,
     required this.routingDebug,
     required this.detectorDebug,
     required this.imagePath,
@@ -79,7 +84,12 @@ class _FieldTestEntry {
   final _ScanCaptureDomain chosenDomain;
   final String decision; // reject | gray | accept
   final String gateDecisionRaw; // reject_strong_no_board | allow_* | unknown
+  final String finalDecisionRaw; // latest decision=* token in detector debug
   final bool boardDetected;
+  final double? postWarpGridness;
+  final double? minPostWarpGridness;
+  final bool rejectedPostWarpGridness;
+  final String? bypassReason;
   final String routingDebug;
   final String detectorDebug;
   final String imagePath;
@@ -96,7 +106,12 @@ class _FieldTestEntry {
       'chosenDomain': chosenDomain.name,
       'decision': decision,
       'gateDecisionRaw': gateDecisionRaw,
+      'finalDecisionRaw': finalDecisionRaw,
       'boardDetected': boardDetected,
+      'postWarpGridness': postWarpGridness,
+      'minPostWarpGridness': minPostWarpGridness,
+      'rejectedPostWarpGridness': rejectedPostWarpGridness,
+      'bypassReason': bypassReason,
       'routingDebug': routingDebug,
       'detectorDebug': detectorDebug,
       'imagePath': imagePath,
@@ -143,7 +158,12 @@ class _FieldTestEntry {
       chosenDomain: chosenDomain,
       decision: json['decision']?.toString() ?? 'gray',
       gateDecisionRaw: json['gateDecisionRaw']?.toString() ?? 'unknown',
+      finalDecisionRaw: json['finalDecisionRaw']?.toString() ?? 'unknown',
       boardDetected: json['boardDetected'] == true,
+      postWarpGridness: (json['postWarpGridness'] as num?)?.toDouble(),
+      minPostWarpGridness: (json['minPostWarpGridness'] as num?)?.toDouble(),
+      rejectedPostWarpGridness: json['rejectedPostWarpGridness'] == true,
+      bypassReason: json['bypassReason']?.toString(),
       routingDebug: json['routingDebug']?.toString() ?? '',
       detectorDebug: json['detectorDebug']?.toString() ?? '',
       imagePath: json['imagePath']?.toString() ?? '',
@@ -174,6 +194,9 @@ class _ScanPageState extends State<ScanPage> {
   static const double _screenMinPostWarpGridness = 0.11;
   static const double _autoRoutingAmbiguousScoreDelta = 0.05;
   static const double _autoRoutingAlternateRetryMinScore = 0.35;
+  static const double _alternateBypassMinBoardQuality = 0.40;
+  static const double _alternateBypassMinBoardConfidence = 0.35;
+  static const double _alternateBypassMinBoardAreaRatio = 0.16;
   static const int _fieldProtocolBucketTarget = 10;
   static const int _fieldProtocolTotalTarget = 40;
   static const String _photoBoardModelAssetPath =
@@ -193,6 +216,8 @@ class _ScanPageState extends State<ScanPage> {
   late final ScanPositionUseCase _scanUseCasePhotoReal;
   late final ScanPositionUseCase _scanUseCaseScreen;
   late final ScanPositionUseCase _scanUseCaseScreenLoose;
+  late final ScanPositionUseCase _scanUseCasePhotoRealNoGate;
+  late final ScanPositionUseCase _scanUseCaseScreenNoGate;
   late final ScanPositionUseCase _datasetScanUseCase;
   late final ScanPositionUseCase _datasetScanUseCaseFast;
   late final RunScanDatasetValidationUseCase _datasetValidationUseCase;
@@ -226,6 +251,9 @@ class _ScanPageState extends State<ScanPage> {
   int _autoRouteRetryCount = 0;
   int _lastScanPrimaryMs = 0;
   int _lastScanAltMs = 0;
+  String _lastReportedGateDecisionRaw = 'unknown';
+  String _lastReportedFinalDecisionRaw = 'unknown';
+  String? _lastBypassReason;
   bool _selectedImageHasExif = false;
   bool _selectedImageLooksScreenshot = false;
   final Map<String, int> _gateDecisionCounters = <String, int>{
@@ -285,6 +313,20 @@ class _ScanPageState extends State<ScanPage> {
       openCvMinBoardConfidence: _screenLooseOpenCvMinBoardConfidence,
       openCvMinBoardConfidenceLineFallback:
           _screenLooseOpenCvMinBoardConfidenceLineFallback,
+      minPostWarpGridness: _screenMinPostWarpGridness,
+    );
+    _scanUseCasePhotoRealNoGate = DefaultScanPipelineFactory.create(
+      validator: _validator,
+      fenBuilder: _fenBuilder,
+      useBoardPresenceGate: false,
+    );
+    _scanUseCaseScreenNoGate = DefaultScanPipelineFactory.create(
+      validator: _validator,
+      fenBuilder: _fenBuilder,
+      useBoardPresenceGate: false,
+      openCvMinBoardConfidence: _screenOpenCvMinBoardConfidence,
+      openCvMinBoardConfidenceLineFallback:
+          _screenOpenCvMinBoardConfidenceLineFallback,
       minPostWarpGridness: _screenMinPostWarpGridness,
     );
     _datasetScanUseCase = DefaultScanPipelineFactory.create(
@@ -347,6 +389,9 @@ class _ScanPageState extends State<ScanPage> {
         _errorMessage = null;
         _lastScanPrimaryMs = 0;
         _lastScanAltMs = 0;
+        _lastReportedGateDecisionRaw = 'unknown';
+        _lastReportedFinalDecisionRaw = 'unknown';
+        _lastBypassReason = null;
         _selectedImageSize = null;
         _manualCorners = const <BoardCorner>[];
       });
@@ -382,6 +427,9 @@ class _ScanPageState extends State<ScanPage> {
       );
       primaryStopwatch.stop();
       final primaryScanMs = primaryStopwatch.elapsedMilliseconds;
+      final primaryGateRaw = _gateDecisionRawFromDetectorDebug(
+        result.detectorDebug,
+      );
       var alternateScanMs = 0;
       var routingDebug = routing.reason;
 
@@ -393,33 +441,61 @@ class _ScanPageState extends State<ScanPage> {
           routing.alternateDomain != null &&
           (routing.ambiguous ||
               ((routing.alternateScore ?? double.negativeInfinity) >=
-                  _autoRoutingAlternateRetryMinScore));
+                  _autoRoutingAlternateRetryMinScore) ||
+              primaryGateRaw == 'allow_strong_accept');
+      var finalUsedBypassNoGate = false;
+      String? bypassReason;
       if (shouldRetryAlternate && retries < maxRetries) {
         retries += 1;
         final alternateDomain = routing.alternateDomain!;
+        final retryAlternateWithoutGate =
+            primaryGateRaw == 'allow_strong_accept';
         final alternateStopwatch = Stopwatch()..start();
         final alternateResult = await _scanWithDomain(
           domain: alternateDomain,
           image: image,
+          bypassGate: retryAlternateWithoutGate,
           allowScreenLooseRetry: false,
         );
         alternateStopwatch.stop();
         alternateScanMs = alternateStopwatch.elapsedMilliseconds;
+        final alternateBypassQualityPass =
+            !retryAlternateWithoutGate ||
+            _passesAlternateBypassQualityGate(alternateResult);
         final switched = _shouldSwitchToAlternateResult(
           primary: result,
           alternate: alternateResult,
+          requireBypassQualityGate: retryAlternateWithoutGate,
         );
         if (switched) {
           result = alternateResult;
           resolvedDomain = alternateDomain;
+          if (retryAlternateWithoutGate) {
+            finalUsedBypassNoGate = true;
+            bypassReason = 'primary_allow_strong_accept_detector_failed';
+          }
         }
         routingDebug =
             '$routingDebug retry_alt=${_captureDomainLabel(alternateDomain)} '
             'alt_score=${_fmtRoutingNumber(routing.alternateScore)} '
             'retry_threshold=${_autoRoutingAlternateRetryMinScore.toStringAsFixed(3)} '
+            'primary_gate_raw=$primaryGateRaw '
             'retry_count=$retries/$maxRetries '
+            'alt_bypass_gate=$retryAlternateWithoutGate '
+            'alt_quality_gate_pass=$alternateBypassQualityPass '
             'switched=$switched alt_board=${alternateResult.boardDetected} '
             't_primary_ms=$primaryScanMs t_alt_ms=$alternateScanMs';
+      }
+
+      var reportedGateDecisionRaw = _gateDecisionRawFromDetectorDebug(
+        result.detectorDebug,
+      );
+      var reportedFinalDecisionRaw = _finalDecisionRawFromDetectorDebug(
+        result.detectorDebug,
+      );
+      if (finalUsedBypassNoGate) {
+        reportedGateDecisionRaw = 'bypass_no_gate';
+        reportedFinalDecisionRaw = 'bypass_no_gate';
       }
 
       if (kDebugMode) {
@@ -438,6 +514,9 @@ class _ScanPageState extends State<ScanPage> {
         _scanResult = result;
         _lastScanPrimaryMs = primaryScanMs;
         _lastScanAltMs = alternateScanMs;
+        _lastReportedGateDecisionRaw = reportedGateDecisionRaw;
+        _lastReportedFinalDecisionRaw = reportedFinalDecisionRaw;
+        _lastBypassReason = bypassReason;
         _editablePosition = result.detectedPosition;
         _recordGateDecision(result.detectorDebug);
         if (routing.isAuto) {
@@ -567,8 +646,10 @@ class _ScanPageState extends State<ScanPage> {
     if (!prediction.isAvailable) {
       return null;
     }
-    final strongProbability = prediction.probability.clamp(0.0, 1.0).toDouble();
-    return strongProbability - rejectThreshold;
+    final routingProbability = prediction.fallbackOrProbability
+        .clamp(0.0, 1.0)
+        .toDouble();
+    return routingProbability - rejectThreshold;
   }
 
   String _fmtRoutingNumber(double? value) {
@@ -603,9 +684,10 @@ class _ScanPageState extends State<ScanPage> {
   Future<ScanPipelineResult> _scanWithDomain({
     required _ScanCaptureDomain domain,
     required ScanInputImage image,
+    bool bypassGate = false,
     bool allowScreenLooseRetry = false,
   }) async {
-    final useCase = _scanUseCaseForDomain(domain);
+    final useCase = _scanUseCaseForDomain(domain, bypassGate: bypassGate);
     var result = await useCase.execute(image);
     if (domain == _ScanCaptureDomain.screen && allowScreenLooseRetry) {
       result = await _maybeRetryScreenLoose(image: image, result: result);
@@ -651,13 +733,16 @@ class _ScanPageState extends State<ScanPage> {
     return looseResult;
   }
 
-  ScanPositionUseCase _scanUseCaseForDomain(_ScanCaptureDomain domain) {
+  ScanPositionUseCase _scanUseCaseForDomain(
+    _ScanCaptureDomain domain, {
+    bool bypassGate = false,
+  }) {
     switch (domain) {
       case _ScanCaptureDomain.photoReal:
       case _ScanCaptureDomain.photoPrint:
-        return _scanUseCasePhotoReal;
+        return bypassGate ? _scanUseCasePhotoRealNoGate : _scanUseCasePhotoReal;
       case _ScanCaptureDomain.screen:
-        return _scanUseCaseScreen;
+        return bypassGate ? _scanUseCaseScreenNoGate : _scanUseCaseScreen;
     }
   }
 
@@ -694,7 +779,12 @@ class _ScanPageState extends State<ScanPage> {
   bool _shouldSwitchToAlternateResult({
     required ScanPipelineResult primary,
     required ScanPipelineResult alternate,
+    bool requireBypassQualityGate = false,
   }) {
+    if (requireBypassQualityGate &&
+        !_passesAlternateBypassQualityGate(alternate)) {
+      return false;
+    }
     if (alternate.boardDetected && !primary.boardDetected) {
       return true;
     }
@@ -719,6 +809,24 @@ class _ScanPageState extends State<ScanPage> {
       return alternateConfidence > primaryConfidence;
     }
     return false;
+  }
+
+  bool _passesAlternateBypassQualityGate(ScanPipelineResult result) {
+    if (!result.boardDetected) {
+      return false;
+    }
+    final quality = _extractBoardQuality(result.detectorDebug);
+    final confidence = _extractBoardConfidence(result.detectorDebug);
+    final areaRatio = _extractDetectorMetric(
+      result.detectorDebug,
+      'board_area_ratio',
+    );
+    if (quality == null || confidence == null || areaRatio == null) {
+      return false;
+    }
+    return quality >= _alternateBypassMinBoardQuality &&
+        confidence >= _alternateBypassMinBoardConfidence &&
+        areaRatio >= _alternateBypassMinBoardAreaRatio;
   }
 
   double? _extractBoardQuality(String detectorDebug) {
@@ -820,11 +928,29 @@ class _ScanPageState extends State<ScanPage> {
   }
 
   String _gateDecisionRawFromDetectorDebug(String detectorDebug) {
+    return _firstDecisionRawFromDetectorDebug(detectorDebug);
+  }
+
+  String _finalDecisionRawFromDetectorDebug(String detectorDebug) {
+    final allMatches = RegExp(
+      r'decision=([a-z_]+)',
+    ).allMatches(detectorDebug).toList(growable: false);
+    if (allMatches.isEmpty || allMatches.last.groupCount < 1) {
+      return 'unknown';
+    }
+    return allMatches.last.group(1)!;
+  }
+
+  String _firstDecisionRawFromDetectorDebug(String detectorDebug) {
     final match = RegExp(r'decision=([a-z_]+)').firstMatch(detectorDebug);
     if (match == null || match.groupCount < 1) {
       return 'unknown';
     }
     return match.group(1)!;
+  }
+
+  bool _isRejectedPostWarpGridness(String detectorDebug) {
+    return detectorDebug.contains('decision=reject_post_warp_gridness');
   }
 
   _FieldExpectedDomain _normalizedFieldDomain(_ScanCaptureDomain domain) {
@@ -898,6 +1024,8 @@ class _ScanPageState extends State<ScanPage> {
         'src=${entry.acquisitionSource} '
         'chosen=${_captureDomainLabel(entry.chosenDomain)} '
         'gate_raw=${entry.gateDecisionRaw} '
+        'final_raw=${entry.finalDecisionRaw} '
+        'bypass_reason=${entry.bypassReason ?? "na"} '
         't_ms=${entry.tPrimaryMs}+${entry.tAltMs} '
         'decision=${entry.decision} '
         'board=${entry.boardDetected} '
@@ -927,10 +1055,21 @@ class _ScanPageState extends State<ScanPage> {
           acquisitionSource: _selectedImageSourceLabel(),
           chosenDomain: _selectedCaptureDomain,
           decision: _decisionLabelFromDetectorDebug(result.detectorDebug),
-          gateDecisionRaw: _gateDecisionRawFromDetectorDebug(
+          gateDecisionRaw: _lastReportedGateDecisionRaw,
+          finalDecisionRaw: _lastReportedFinalDecisionRaw,
+          bypassReason: _lastBypassReason,
+          boardDetected: result.boardDetected,
+          postWarpGridness: _extractDetectorMetric(
+            result.detectorDebug,
+            'post_warp_gridness',
+          ),
+          minPostWarpGridness: _extractDetectorMetric(
+            result.detectorDebug,
+            'min_post_warp_gridness',
+          ),
+          rejectedPostWarpGridness: _isRejectedPostWarpGridness(
             result.detectorDebug,
           ),
-          boardDetected: result.boardDetected,
           routingDebug: _routingDebugLabel,
           detectorDebug: result.detectorDebug,
           imagePath: _selectedImage?.path ?? '',
@@ -1077,6 +1216,11 @@ class _ScanPageState extends State<ScanPage> {
         'source=${entry.acquisitionSource} '
         'chosen=$chosenDomain route_match=$routeMatch '
         'gate_decision_raw=${entry.gateDecisionRaw} '
+        'final_decision_raw=${entry.finalDecisionRaw} '
+        'bypass_reason=${entry.bypassReason ?? "na"} '
+        'post_warp_gridness=${entry.postWarpGridness?.toStringAsFixed(3) ?? "na"} '
+        'min_post_warp_gridness=${entry.minPostWarpGridness?.toStringAsFixed(3) ?? "na"} '
+        'rejected_post_warp_gridness=${entry.rejectedPostWarpGridness} '
         't_primary_ms=${entry.tPrimaryMs} t_alt_ms=${entry.tAltMs} '
         'decision=${entry.decision} boardDetected=${entry.boardDetected} '
         'outcome=${_fieldOutcomeLabel(entry)}',
@@ -1128,6 +1272,11 @@ class _ScanPageState extends State<ScanPage> {
       'acquisition_source=${entry.acquisitionSource}',
       'chosen_domain=${_captureDomainLabel(entry.chosenDomain)}',
       'gate_decision_raw=${entry.gateDecisionRaw}',
+      'final_decision_raw=${entry.finalDecisionRaw}',
+      'bypass_reason=${entry.bypassReason ?? "na"}',
+      'post_warp_gridness=${entry.postWarpGridness?.toStringAsFixed(3) ?? "na"}',
+      'min_post_warp_gridness=${entry.minPostWarpGridness?.toStringAsFixed(3) ?? "na"}',
+      'rejected_post_warp_gridness=${entry.rejectedPostWarpGridness}',
       't_primary_ms=${entry.tPrimaryMs}',
       't_alt_ms=${entry.tAltMs}',
       'decision=${entry.decision}',
