@@ -5,6 +5,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:image_picker/image_picker.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:tflite_flutter/tflite_flutter.dart' as tfl;
 
 import '../data/services/asset_scan_validation_dataset_loader.dart';
@@ -74,6 +75,64 @@ class _FieldTestEntry {
   final String routingDebug;
   final String detectorDebug;
   final String imagePath;
+
+  Map<String, Object?> toJson() {
+    return <String, Object?>{
+      'index': index,
+      'timestamp': timestamp.toIso8601String(),
+      'expectedDomain': expectedDomain.name,
+      'expectedClass': expectedClass.name,
+      'chosenDomain': chosenDomain.name,
+      'decision': decision,
+      'boardDetected': boardDetected,
+      'routingDebug': routingDebug,
+      'detectorDebug': detectorDebug,
+      'imagePath': imagePath,
+    };
+  }
+
+  static _FieldTestEntry? fromJson(Map<String, dynamic> json) {
+    final expectedDomain = switch (json['expectedDomain']) {
+      'screen' => _FieldExpectedDomain.screen,
+      'photoReal' => _FieldExpectedDomain.photoReal,
+      _ => null,
+    };
+    final expectedClass = switch (json['expectedClass']) {
+      'board' => _FieldExpectedClass.board,
+      'noBoard' => _FieldExpectedClass.noBoard,
+      _ => null,
+    };
+    final chosenDomain = switch (json['chosenDomain']) {
+      'photoReal' => _ScanCaptureDomain.photoReal,
+      'photoPrint' => _ScanCaptureDomain.photoPrint,
+      'screen' => _ScanCaptureDomain.screen,
+      _ => null,
+    };
+    final timestampRaw = json['timestamp']?.toString();
+    final timestamp = timestampRaw == null
+        ? null
+        : DateTime.tryParse(timestampRaw);
+
+    if (expectedDomain == null ||
+        expectedClass == null ||
+        chosenDomain == null ||
+        timestamp == null) {
+      return null;
+    }
+
+    return _FieldTestEntry(
+      index: (json['index'] as num?)?.toInt() ?? 0,
+      timestamp: timestamp,
+      expectedDomain: expectedDomain,
+      expectedClass: expectedClass,
+      chosenDomain: chosenDomain,
+      decision: json['decision']?.toString() ?? 'gray',
+      boardDetected: json['boardDetected'] == true,
+      routingDebug: json['routingDebug']?.toString() ?? '',
+      detectorDebug: json['detectorDebug']?.toString() ?? '',
+      imagePath: json['imagePath']?.toString() ?? '',
+    );
+  }
 }
 
 class ScanPage extends StatefulWidget {
@@ -104,6 +163,11 @@ class _ScanPageState extends State<ScanPage> {
       'assets/scan_models/board_binary_photo.tflite';
   static const String _screenBoardModelAssetPath =
       'assets/scan_models/board_binary_screen.tflite';
+  static const String _fieldProtocolPrefsKey = 'scan.field_protocol.entries';
+  static const String _fieldProtocolDomainPrefsKey =
+      'scan.field_protocol.expected_domain';
+  static const String _fieldProtocolClassPrefsKey =
+      'scan.field_protocol.expected_class';
 
   final ImagePicker _picker = ImagePicker();
   final GridSquareMapper _squareMapper = const GridSquareMapper();
@@ -160,6 +224,7 @@ class _ScanPageState extends State<ScanPage> {
     if (kDebugMode) {
       debugPrint('[scan][tflite] runtime=${tfl.version}');
     }
+    _loadFieldProtocolState();
     _photoGateClassifier =
         DefaultScanPipelineFactory.boardPresenceClassifierForAsset(
           modelAssetPath: _photoBoardModelAssetPath,
@@ -229,7 +294,12 @@ class _ScanPageState extends State<ScanPage> {
 
   Future<void> _pickImage(ImageSource source) async {
     try {
-      final file = await _picker.pickImage(source: source, imageQuality: 95);
+      final file = await _picker.pickImage(
+        source: source,
+        imageQuality: 90,
+        maxWidth: 1920,
+        maxHeight: 1920,
+      );
       if (file == null) {
         return;
       }
@@ -781,6 +851,7 @@ class _ScanPageState extends State<ScanPage> {
         ),
       );
     });
+    _saveFieldProtocolState();
 
     if (!mounted) {
       return;
@@ -799,9 +870,89 @@ class _ScanPageState extends State<ScanPage> {
       return;
     }
     setState(() => _fieldTestEntries.clear());
+    _saveFieldProtocolState();
     ScaffoldMessenger.of(
       context,
     ).showSnackBar(const SnackBar(content: Text('Protocol samples cleared.')));
+  }
+
+  Future<void> _saveFieldProtocolState() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final payload = <String, Object?>{
+        'entries': _fieldTestEntries
+            .map((entry) => entry.toJson())
+            .toList(growable: false),
+      };
+      await prefs.setString(_fieldProtocolPrefsKey, jsonEncode(payload));
+      await prefs.setString(
+        _fieldProtocolDomainPrefsKey,
+        _fieldExpectedDomain.name,
+      );
+      await prefs.setString(
+        _fieldProtocolClassPrefsKey,
+        _fieldExpectedClass.name,
+      );
+    } catch (e) {
+      if (kDebugMode) {
+        debugPrint('[scan][field-protocol] save_failed=$e');
+      }
+    }
+  }
+
+  Future<void> _loadFieldProtocolState() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final raw = prefs.getString(_fieldProtocolPrefsKey);
+      final storedDomain = prefs.getString(_fieldProtocolDomainPrefsKey);
+      final storedClass = prefs.getString(_fieldProtocolClassPrefsKey);
+
+      final parsedEntries = <_FieldTestEntry>[];
+      if (raw != null && raw.isNotEmpty) {
+        final decoded = jsonDecode(raw);
+        if (decoded is Map<String, dynamic>) {
+          final entriesRaw = decoded['entries'];
+          if (entriesRaw is List) {
+            for (final item in entriesRaw) {
+              if (item is Map) {
+                final parsed = _FieldTestEntry.fromJson(
+                  Map<String, dynamic>.from(item),
+                );
+                if (parsed != null) {
+                  parsedEntries.add(parsed);
+                }
+              }
+            }
+          }
+        }
+      }
+
+      if (!mounted) {
+        return;
+      }
+
+      setState(() {
+        _fieldTestEntries
+          ..clear()
+          ..addAll(parsedEntries);
+
+        if (storedDomain == _FieldExpectedDomain.photoReal.name) {
+          _fieldExpectedDomain = _FieldExpectedDomain.photoReal;
+        } else {
+          _fieldExpectedDomain = _FieldExpectedDomain.screen;
+        }
+
+        if (storedClass == _FieldExpectedClass.noBoard.name) {
+          _fieldExpectedClass = _FieldExpectedClass.noBoard;
+        } else {
+          _fieldExpectedClass = _FieldExpectedClass.board;
+        }
+      });
+    } catch (e) {
+      if (kDebugMode) {
+        debugPrint('[scan][field-protocol] load_failed=$e');
+      }
+    }
   }
 
   String _buildFieldProtocolReportText() {
@@ -1647,786 +1798,828 @@ class _ScanPageState extends State<ScanPage> {
       appBar: AppBar(title: const Text('Scan position')),
       backgroundColor: const Color(0xFF282725),
       body: SafeArea(
-        child: ListView(
-          padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
+        child: Stack(
           children: [
-            _SectionCard(
-              title: 'Capture image',
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Wrap(
-                    spacing: 10,
-                    runSpacing: 10,
+            ListView(
+              padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
+              children: [
+                _SectionCard(
+                  title: 'Capture image',
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      FilledButton.icon(
-                        onPressed: () => _pickImage(ImageSource.camera),
-                        icon: const Icon(Icons.photo_camera_outlined),
-                        label: const Text('Camera'),
+                      Wrap(
+                        spacing: 10,
+                        runSpacing: 10,
+                        children: [
+                          FilledButton.icon(
+                            onPressed: _isScanning
+                                ? null
+                                : () => _pickImage(ImageSource.camera),
+                            icon: const Icon(Icons.photo_camera_outlined),
+                            label: const Text('Camera'),
+                          ),
+                          FilledButton.tonalIcon(
+                            onPressed: _isScanning
+                                ? null
+                                : () => _pickImage(ImageSource.gallery),
+                            icon: const Icon(Icons.photo_library_outlined),
+                            label: const Text('Gallery'),
+                          ),
+                          FilledButton.icon(
+                            onPressed: imageBytes == null ? null : _runScan,
+                            icon: _isScanning
+                                ? const SizedBox.square(
+                                    dimension: 16,
+                                    child: CircularProgressIndicator(
+                                      strokeWidth: 2,
+                                    ),
+                                  )
+                                : const Icon(Icons.center_focus_strong),
+                            label: Text(
+                              _isScanning ? 'Scanning...' : 'Scanner',
+                            ),
+                          ),
+                          OutlinedButton.icon(
+                            onPressed:
+                                (_isScanning ||
+                                    _isRunningDatasetValidation ||
+                                    _isAutoFillingAllExpected)
+                                ? null
+                                : _runDatasetValidation,
+                            icon: _isRunningDatasetValidation
+                                ? const SizedBox.square(
+                                    dimension: 16,
+                                    child: CircularProgressIndicator(
+                                      strokeWidth: 2,
+                                    ),
+                                  )
+                                : const Icon(Icons.science_outlined),
+                            label: const Text('Validate dataset'),
+                          ),
+                        ],
                       ),
-                      FilledButton.tonalIcon(
-                        onPressed: () => _pickImage(ImageSource.gallery),
-                        icon: const Icon(Icons.photo_library_outlined),
-                        label: const Text('Gallery'),
+                      const SizedBox(height: 8),
+                      Row(
+                        children: [
+                          Icon(
+                            Icons.speed_outlined,
+                            size: 16,
+                            color: Colors.white.withValues(alpha: 0.75),
+                          ),
+                          const SizedBox(width: 6),
+                          Expanded(
+                            child: Text(
+                              'Validation rapide du dataset',
+                              style: TextStyle(
+                                fontSize: 12,
+                                color: Colors.white.withValues(alpha: 0.75),
+                              ),
+                            ),
+                          ),
+                          Switch.adaptive(
+                            value: _useFastDatasetValidation,
+                            onChanged:
+                                (_isScanning ||
+                                    _isRunningDatasetValidation ||
+                                    _isLoadingSelectedEvaluation ||
+                                    _isAutoFillingAllExpected)
+                                ? null
+                                : (v) => setState(
+                                    () => _useFastDatasetValidation = v,
+                                  ),
+                          ),
+                        ],
                       ),
-                      FilledButton.icon(
-                        onPressed: imageBytes == null ? null : _runScan,
-                        icon: _isScanning
-                            ? const SizedBox.square(
-                                dimension: 16,
-                                child: CircularProgressIndicator(
-                                  strokeWidth: 2,
-                                ),
-                              )
-                            : const Icon(Icons.center_focus_strong),
-                        label: Text(_isScanning ? 'Scanning...' : 'Scanner'),
-                      ),
-                      OutlinedButton.icon(
-                        onPressed:
-                            (_isRunningDatasetValidation ||
-                                _isAutoFillingAllExpected)
-                            ? null
-                            : _runDatasetValidation,
-                        icon: _isRunningDatasetValidation
-                            ? const SizedBox.square(
-                                dimension: 16,
-                                child: CircularProgressIndicator(
-                                  strokeWidth: 2,
-                                ),
-                              )
-                            : const Icon(Icons.science_outlined),
-                        label: const Text('Validate dataset'),
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 8),
-                  Row(
-                    children: [
-                      Icon(
-                        Icons.speed_outlined,
-                        size: 16,
-                        color: Colors.white.withValues(alpha: 0.75),
-                      ),
-                      const SizedBox(width: 6),
-                      Expanded(
-                        child: Text(
-                          'Validation rapide du dataset',
+                      if (_datasetProgressLabel != null) ...[
+                        const SizedBox(height: 8),
+                        Text(
+                          _datasetProgressLabel!,
                           style: TextStyle(
                             fontSize: 12,
                             color: Colors.white.withValues(alpha: 0.75),
                           ),
                         ),
-                      ),
-                      Switch.adaptive(
-                        value: _useFastDatasetValidation,
-                        onChanged:
-                            (_isRunningDatasetValidation ||
-                                _isLoadingSelectedEvaluation ||
-                                _isAutoFillingAllExpected)
-                            ? null
-                            : (v) =>
-                                  setState(() => _useFastDatasetValidation = v),
-                      ),
-                    ],
-                  ),
-                  if (_datasetProgressLabel != null) ...[
-                    const SizedBox(height: 8),
-                    Text(
-                      _datasetProgressLabel!,
-                      style: TextStyle(
-                        fontSize: 12,
-                        color: Colors.white.withValues(alpha: 0.75),
-                      ),
-                    ),
-                  ],
-                  if (_selectedImage != null) ...[
-                    const SizedBox(height: 8),
-                    Text(
-                      'Routing: ${_captureDomainLabel(_selectedCaptureDomain)} '
-                      '(mode=${_routingModeLabel()}, '
-                      'source=${_selectedImageSourceLabel()}, '
-                      'screenshot_hint=${_selectedImageLooksScreenshot ? "yes" : "no"}, '
-                      'exif=${_selectedImageHasExif ? "present" : "absent"})',
-                      style: TextStyle(
-                        fontSize: 12,
-                        color: Colors.white.withValues(alpha: 0.75),
-                      ),
-                    ),
-                    const SizedBox(height: 2),
-                    Text(
-                      _routingDebugLabel,
-                      style: TextStyle(
-                        fontSize: 11,
-                        color: Colors.white.withValues(alpha: 0.65),
-                      ),
-                    ),
-                    const SizedBox(height: 4),
-                    Text(
-                      'Gate counters: '
-                      'reject=${_gateDecisionCounters['strong_reject'] ?? 0} '
-                      'gray=${_gateDecisionCounters['gray'] ?? 0} '
-                      'accept=${_gateDecisionCounters['strong_accept'] ?? 0}',
-                      style: TextStyle(
-                        fontSize: 11,
-                        color: Colors.white.withValues(alpha: 0.70),
-                      ),
-                    ),
-                    const SizedBox(height: 2),
-                    Text(
-                      _autoRoutingRetrySummary(),
-                      style: TextStyle(
-                        fontSize: 11,
-                        color: Colors.white.withValues(alpha: 0.65),
-                      ),
-                    ),
-                  ],
-                  if (_selectedImage != null) ...[
-                    const SizedBox(height: 8),
-                    Text(
-                      'Routing mode (AUTO par contenu ou override)',
-                      style: TextStyle(
-                        fontSize: 12,
-                        color: Colors.white.withValues(alpha: 0.75),
-                      ),
-                    ),
-                    const SizedBox(height: 6),
-                    Wrap(
-                      spacing: 8,
-                      runSpacing: 8,
-                      children: [
-                        ChoiceChip(
-                          label: const Text('AUTO'),
-                          selected: _captureDomainOverride == null,
-                          onSelected: (selected) {
-                            if (!selected) {
-                              return;
-                            }
-                            _setCaptureDomainOverride(null);
-                          },
-                        ),
-                        ChoiceChip(
-                          label: const Text('Photo reelle'),
-                          selected:
-                              _captureDomainOverride ==
-                              _ScanCaptureDomain.photoReal,
-                          onSelected: (selected) {
-                            if (!selected) {
-                              return;
-                            }
-                            _setCaptureDomainOverride(
-                              _ScanCaptureDomain.photoReal,
-                            );
-                          },
-                        ),
-                        ChoiceChip(
-                          label: const Text('Photo imprimee (livre)'),
-                          selected:
-                              _captureDomainOverride ==
-                              _ScanCaptureDomain.photoPrint,
-                          onSelected: (selected) {
-                            if (!selected) {
-                              return;
-                            }
-                            _setCaptureDomainOverride(
-                              _ScanCaptureDomain.photoPrint,
-                            );
-                          },
-                        ),
-                        ChoiceChip(
-                          label: const Text('Screenshot / ecran'),
-                          selected:
-                              _captureDomainOverride ==
-                              _ScanCaptureDomain.screen,
-                          onSelected: (selected) {
-                            if (!selected) {
-                              return;
-                            }
-                            _setCaptureDomainOverride(
-                              _ScanCaptureDomain.screen,
-                            );
-                          },
-                        ),
                       ],
-                    ),
-                    const SizedBox(height: 4),
-                    Text(
-                      'EXIF et chemin screenshot sont des hints seulement.',
-                      style: TextStyle(
-                        fontSize: 11,
-                        color: Colors.white.withValues(alpha: 0.65),
-                      ),
-                    ),
-                  ],
-                ],
-              ),
-            ),
-            const SizedBox(height: 12),
-            _SectionCard(
-              title: 'Protocole terrain (40 tests)',
-              subtitle:
-                  'Log terrain pour ChatGPT: domaine choisi, decision, boardDetected.',
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    'Progression: ${_fieldTestEntries.length}/$_fieldProtocolTotalTarget',
-                    style: TextStyle(
-                      fontSize: 12,
-                      color: Colors.white.withValues(alpha: 0.80),
-                    ),
-                  ),
-                  const SizedBox(height: 4),
-                  Text(
-                    'screen_board ${protocolCounts['screen_board'] ?? 0}/$_fieldProtocolBucketTarget | '
-                    'screen_no_board ${protocolCounts['screen_no_board'] ?? 0}/$_fieldProtocolBucketTarget',
-                    style: TextStyle(
-                      fontSize: 11,
-                      color: Colors.white.withValues(alpha: 0.70),
-                    ),
-                  ),
-                  Text(
-                    'photo_real_board ${protocolCounts['photo_real_board'] ?? 0}/$_fieldProtocolBucketTarget | '
-                    'photo_real_no_board ${protocolCounts['photo_real_no_board'] ?? 0}/$_fieldProtocolBucketTarget',
-                    style: TextStyle(
-                      fontSize: 11,
-                      color: Colors.white.withValues(alpha: 0.70),
-                    ),
-                  ),
-                  const SizedBox(height: 8),
-                  Text(
-                    'Attendu: domaine',
-                    style: TextStyle(
-                      fontSize: 12,
-                      color: Colors.white.withValues(alpha: 0.75),
-                    ),
-                  ),
-                  const SizedBox(height: 6),
-                  Wrap(
-                    spacing: 8,
-                    runSpacing: 8,
-                    children: [
-                      ChoiceChip(
-                        label: const Text('screen'),
-                        selected:
-                            _fieldExpectedDomain == _FieldExpectedDomain.screen,
-                        onSelected: (selected) {
-                          if (!selected) {
-                            return;
-                          }
-                          setState(
-                            () => _fieldExpectedDomain =
-                                _FieldExpectedDomain.screen,
-                          );
-                        },
-                      ),
-                      ChoiceChip(
-                        label: const Text('photo_real'),
-                        selected:
-                            _fieldExpectedDomain ==
-                            _FieldExpectedDomain.photoReal,
-                        onSelected: (selected) {
-                          if (!selected) {
-                            return;
-                          }
-                          setState(
-                            () => _fieldExpectedDomain =
-                                _FieldExpectedDomain.photoReal,
-                          );
-                        },
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 8),
-                  Text(
-                    'Attendu: classe',
-                    style: TextStyle(
-                      fontSize: 12,
-                      color: Colors.white.withValues(alpha: 0.75),
-                    ),
-                  ),
-                  const SizedBox(height: 6),
-                  Wrap(
-                    spacing: 8,
-                    runSpacing: 8,
-                    children: [
-                      ChoiceChip(
-                        label: const Text('board'),
-                        selected:
-                            _fieldExpectedClass == _FieldExpectedClass.board,
-                        onSelected: (selected) {
-                          if (!selected) {
-                            return;
-                          }
-                          setState(
-                            () =>
-                                _fieldExpectedClass = _FieldExpectedClass.board,
-                          );
-                        },
-                      ),
-                      ChoiceChip(
-                        label: const Text('no_board'),
-                        selected:
-                            _fieldExpectedClass == _FieldExpectedClass.noBoard,
-                        onSelected: (selected) {
-                          if (!selected) {
-                            return;
-                          }
-                          setState(
-                            () => _fieldExpectedClass =
-                                _FieldExpectedClass.noBoard,
-                          );
-                        },
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 10),
-                  Wrap(
-                    spacing: 8,
-                    runSpacing: 8,
-                    children: [
-                      FilledButton.icon(
-                        onPressed: _scanResult == null
-                            ? null
-                            : _recordCurrentScanToFieldProtocol,
-                        icon: const Icon(
-                          Icons.playlist_add_check_circle_outlined,
-                        ),
-                        label: const Text('Log scan courant'),
-                      ),
-                      OutlinedButton.icon(
-                        onPressed: _fieldTestEntries.isEmpty
-                            ? null
-                            : _copyFieldProtocolReport,
-                        icon: const Icon(Icons.copy_all_outlined),
-                        label: const Text('Copier report'),
-                      ),
-                      OutlinedButton.icon(
-                        onPressed: _fieldTestEntries.isEmpty
-                            ? null
-                            : _copyLatestFalsePositiveLog,
-                        icon: const Icon(Icons.warning_amber_outlined),
-                        label: const Text('Copier FP'),
-                      ),
-                      OutlinedButton.icon(
-                        onPressed: _fieldTestEntries.isEmpty
-                            ? null
-                            : _copyLatestFalseNegativeLog,
-                        icon: const Icon(Icons.error_outline),
-                        label: const Text('Copier FN'),
-                      ),
-                      OutlinedButton.icon(
-                        onPressed: _fieldTestEntries.isEmpty
-                            ? null
-                            : _clearFieldProtocolEntries,
-                        icon: const Icon(Icons.delete_outline),
-                        label: const Text('Vider'),
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 8),
-                  Text(
-                    'FP=$protocolFalsePositives | FN=$protocolFalseNegatives',
-                    style: TextStyle(
-                      fontSize: 11,
-                      color: Colors.white.withValues(alpha: 0.70),
-                    ),
-                  ),
-                  if (protocolLatestLines.isNotEmpty) ...[
-                    const SizedBox(height: 8),
-                    SelectableText(
-                      protocolLatestLines.join('\n'),
-                      style: TextStyle(
-                        fontSize: 11,
-                        color: Colors.white.withValues(alpha: 0.8),
-                      ),
-                    ),
-                  ],
-                ],
-              ),
-            ),
-            if (_datasetReport != null) ...[
-              const SizedBox(height: 12),
-              _SectionCard(
-                title: 'Dataset validation',
-                subtitle:
-                    'Excellent ${_datasetReport!.excellentPassedCount}/${_datasetReport!.total} - '
-                    'Quality ${_datasetReport!.qualityPassedCount}/${_datasetReport!.total} - '
-                    'Functional ${_datasetReport!.functionalPassedCount}/${_datasetReport!.total}',
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    DropdownButton<String>(
-                      isExpanded: true,
-                      value: _selectedEvaluation?.testCase.id,
-                      items: _datasetReport!.evaluations
-                          .map(
-                            (e) => DropdownMenuItem<String>(
-                              value: e.testCase.id,
-                              child: Text('${e.testCase.id}  ${e.statusLabel}'),
-                            ),
-                          )
-                          .toList(growable: false),
-                      onChanged: (id) {
-                        if (id == null) {
-                          return;
-                        }
-                        _hydrateSelectedEvaluation(id);
-                      },
-                    ),
-                    const SizedBox(height: 8),
-                    OutlinedButton.icon(
-                      onPressed:
-                          (_selectedEvaluation == null ||
-                              _isLoadingSelectedEvaluation ||
-                              _isRunningDatasetValidation ||
-                              _isAutoFillingAllExpected)
-                          ? null
-                          : () => _hydrateSelectedEvaluation(
-                              _selectedEvaluation!.testCase.id,
-                            ),
-                      icon: _isLoadingSelectedEvaluation
-                          ? const SizedBox.square(
-                              dimension: 14,
-                              child: CircularProgressIndicator(strokeWidth: 2),
-                            )
-                          : const Icon(Icons.replay_outlined),
-                      label: const Text('Validate selected case'),
-                    ),
-                    const SizedBox(height: 8),
-                    OutlinedButton.icon(
-                      onPressed:
-                          (_isRunningDatasetValidation ||
-                              _isLoadingSelectedEvaluation ||
-                              _isAutoFillingAllExpected)
-                          ? null
-                          : _autoFillExpectedForAllCases,
-                      icon: _isAutoFillingAllExpected
-                          ? const SizedBox.square(
-                              dimension: 14,
-                              child: CircularProgressIndicator(strokeWidth: 2),
-                            )
-                          : const Icon(Icons.copy_all_outlined),
-                      label: const Text('Auto-fill all + copy JSON'),
-                    ),
-                    const SizedBox(height: 8),
-                    OutlinedButton.icon(
-                      onPressed:
-                          (_isRunningDatasetValidation ||
-                              _isLoadingSelectedEvaluation)
-                          ? null
-                          : _copyValidationTextReport,
-                      icon: const Icon(Icons.text_snippet_outlined),
-                      label: const Text('Copy validation text report'),
-                    ),
-                    if (_selectedEvaluation != null) ...[
-                      Text('Status: ${_selectedEvaluation!.statusLabel}'),
-                      Text('Image: ${_selectedEvaluation!.testCase.image}'),
-                      if (_selectedEvaluation!.result != null)
+                      if (_selectedImage != null) ...[
+                        const SizedBox(height: 8),
                         Text(
-                          'Detector debug: ${_selectedEvaluation!.result!.detectorDebug}',
+                          'Routing: ${_captureDomainLabel(_selectedCaptureDomain)} '
+                          '(mode=${_routingModeLabel()}, '
+                          'source=${_selectedImageSourceLabel()}, '
+                          'screenshot_hint=${_selectedImageLooksScreenshot ? "yes" : "no"}, '
+                          'exif=${_selectedImageHasExif ? "present" : "absent"})',
                           style: TextStyle(
                             fontSize: 12,
-                            color: Colors.white.withValues(alpha: 0.80),
+                            color: Colors.white.withValues(alpha: 0.75),
                           ),
                         ),
-                      Text(
-                        'Compared fields: ${_selectedEvaluation!.comparisons.length}',
-                      ),
-                      if (_selectedEvaluation!.cornerErrorMetrics != null) ...[
-                        Builder(
-                          builder: (context) {
-                            final metrics =
-                                _selectedEvaluation!.cornerErrorMetrics!;
-                            final meanPercent = metrics.meanPercent;
-                            final maxPercent = metrics.maxPercent;
-                            Color color;
-                            String level;
-                            if (meanPercent < 4.0 && maxPercent < 8.0) {
-                              color = Colors.lightGreenAccent;
-                              level = 'excellent';
-                            } else if (meanPercent < 8.0 && maxPercent < 15.0) {
-                              color = Colors.amberAccent;
-                              level = 'acceptable';
-                            } else {
-                              color = Colors.redAccent;
-                              level = 'to_fix';
-                            }
-
-                            return Text(
-                              'Corner error: mean ${metrics.meanPx.toStringAsFixed(1)} px '
-                              '(${meanPercent.toStringAsFixed(2)}%), '
-                              'max ${metrics.maxPx.toStringAsFixed(1)} px '
-                              '(${metrics.maxPercent.toStringAsFixed(2)}%) '
-                              '[$level]',
-                              style: TextStyle(fontSize: 12, color: color),
-                            );
-                          },
+                        const SizedBox(height: 2),
+                        Text(
+                          _routingDebugLabel,
+                          style: TextStyle(
+                            fontSize: 11,
+                            color: Colors.white.withValues(alpha: 0.65),
+                          ),
+                        ),
+                        const SizedBox(height: 4),
+                        Text(
+                          'Gate counters: '
+                          'reject=${_gateDecisionCounters['strong_reject'] ?? 0} '
+                          'gray=${_gateDecisionCounters['gray'] ?? 0} '
+                          'accept=${_gateDecisionCounters['strong_accept'] ?? 0}',
+                          style: TextStyle(
+                            fontSize: 11,
+                            color: Colors.white.withValues(alpha: 0.70),
+                          ),
+                        ),
+                        const SizedBox(height: 2),
+                        Text(
+                          _autoRoutingRetrySummary(),
+                          style: TextStyle(
+                            fontSize: 11,
+                            color: Colors.white.withValues(alpha: 0.65),
+                          ),
                         ),
                       ],
-                      if (_selectedEvaluation!.error != null)
+                      if (_selectedImage != null) ...[
+                        const SizedBox(height: 8),
                         Text(
-                          'Error: ${_selectedEvaluation!.error}',
-                          style: const TextStyle(color: Colors.redAccent),
-                        ),
-                      ..._selectedEvaluation!.comparisons.map(
-                        (c) => Text(
-                          '${c.field}: expected=${c.expected} detected=${c.detected} '
-                          '${c.matched ? "OK" : "KO"}',
+                          'Routing mode (AUTO par contenu ou override)',
                           style: TextStyle(
-                            color: c.matched
-                                ? Colors.white.withValues(alpha: 0.9)
-                                : Colors.redAccent,
                             fontSize: 12,
+                            color: Colors.white.withValues(alpha: 0.75),
                           ),
                         ),
-                      ),
-                      const SizedBox(height: 8),
-                      OutlinedButton.icon(
-                        onPressed:
-                            (_selectedEvaluation!.result == null ||
-                                _isAutoFillingAllExpected)
-                            ? null
-                            : _autoFillExpectedForSelectedCase,
-                        icon: const Icon(Icons.auto_fix_high_outlined),
-                        label: const Text('Auto-fill expected'),
-                      ),
-                      const SizedBox(height: 10),
+                        const SizedBox(height: 6),
+                        Wrap(
+                          spacing: 8,
+                          runSpacing: 8,
+                          children: [
+                            ChoiceChip(
+                              label: const Text('AUTO'),
+                              selected: _captureDomainOverride == null,
+                              onSelected: (selected) {
+                                if (!selected) {
+                                  return;
+                                }
+                                _setCaptureDomainOverride(null);
+                              },
+                            ),
+                            ChoiceChip(
+                              label: const Text('Photo reelle'),
+                              selected:
+                                  _captureDomainOverride ==
+                                  _ScanCaptureDomain.photoReal,
+                              onSelected: (selected) {
+                                if (!selected) {
+                                  return;
+                                }
+                                _setCaptureDomainOverride(
+                                  _ScanCaptureDomain.photoReal,
+                                );
+                              },
+                            ),
+                            ChoiceChip(
+                              label: const Text('Photo imprimee (livre)'),
+                              selected:
+                                  _captureDomainOverride ==
+                                  _ScanCaptureDomain.photoPrint,
+                              onSelected: (selected) {
+                                if (!selected) {
+                                  return;
+                                }
+                                _setCaptureDomainOverride(
+                                  _ScanCaptureDomain.photoPrint,
+                                );
+                              },
+                            ),
+                            ChoiceChip(
+                              label: const Text('Screenshot / ecran'),
+                              selected:
+                                  _captureDomainOverride ==
+                                  _ScanCaptureDomain.screen,
+                              onSelected: (selected) {
+                                if (!selected) {
+                                  return;
+                                }
+                                _setCaptureDomainOverride(
+                                  _ScanCaptureDomain.screen,
+                                );
+                              },
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 4),
+                        Text(
+                          'EXIF et chemin screenshot sont des hints seulement.',
+                          style: TextStyle(
+                            fontSize: 11,
+                            color: Colors.white.withValues(alpha: 0.65),
+                          ),
+                        ),
+                      ],
+                    ],
+                  ),
+                ),
+                const SizedBox(height: 12),
+                _SectionCard(
+                  title: 'Protocole terrain (40 tests)',
+                  subtitle:
+                      'Log terrain pour ChatGPT: domaine choisi, decision, boardDetected.',
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
                       Text(
-                        'Corner annotator (${_manualCorners.length}/4) '
-                        'order: ${_datasetReport!.dataset.pointOrder}',
+                        'Progression: ${_fieldTestEntries.length}/$_fieldProtocolTotalTarget',
                         style: TextStyle(
                           fontSize: 12,
                           color: Colors.white.withValues(alpha: 0.80),
                         ),
                       ),
-                      const SizedBox(height: 8),
-                      if (imageBytes != null && _selectedImageSize != null)
-                        _CornerAnnotator(
-                          bytes: imageBytes,
-                          imageSize: _selectedImageSize!,
-                          corners: _manualCorners,
-                          onTapImage: _onManualCornerTapped,
-                        )
-                      else if (imageBytes != null)
-                        Text(
-                          'Loading image metadata...',
-                          style: TextStyle(
-                            fontSize: 12,
-                            color: Colors.white.withValues(alpha: 0.70),
-                          ),
-                        ),
-                      const SizedBox(height: 8),
-                      Wrap(
-                        spacing: 8,
-                        runSpacing: 8,
-                        children: [
-                          OutlinedButton.icon(
-                            onPressed: _manualCorners.isEmpty
-                                ? null
-                                : _undoManualCorner,
-                            icon: const Icon(Icons.undo),
-                            label: const Text('Undo'),
-                          ),
-                          OutlinedButton.icon(
-                            onPressed: _manualCorners.isEmpty
-                                ? null
-                                : _clearManualCorners,
-                            icon: const Icon(Icons.clear),
-                            label: const Text('Clear'),
-                          ),
-                          OutlinedButton.icon(
-                            onPressed: _copyManualCornersJson,
-                            icon: const Icon(Icons.copy_all_outlined),
-                            label: const Text('Copy corners JSON'),
-                          ),
-                        ],
-                      ),
-                      if (_manualCorners.isNotEmpty) ...[
-                        const SizedBox(height: 8),
-                        SelectableText(
-                          _manualCornersJson(),
-                          style: const TextStyle(fontSize: 12),
-                        ),
-                      ],
-                    ],
-                  ],
-                ),
-              ),
-            ],
-            if (imageBytes != null) ...[
-              const SizedBox(height: 12),
-              _SectionCard(
-                title: 'Source preview',
-                subtitle:
-                    '${_selectedImage?.path}\nDomain: ${_captureDomainLabel(_selectedCaptureDomain)}',
-                child: _ImagePreview(bytes: imageBytes),
-              ),
-            ],
-            if (_errorMessage != null) ...[
-              const SizedBox(height: 12),
-              Text(
-                _errorMessage!,
-                style: const TextStyle(color: Colors.redAccent),
-              ),
-            ],
-            if (_scanResult != null) ...[
-              const SizedBox(height: 12),
-              _SectionCard(
-                title: 'Detected board',
-                subtitle:
-                    'OpenCV final verdict: board=${_scanResult!.boardDetected} '
-                    'corners=${_scanResult!.geometry.corners.length}/4',
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    if (rectifiedBytes != null)
-                      _ImagePreview(bytes: rectifiedBytes),
-                    const SizedBox(height: 8),
-                    Text(
-                      'Gate allowed: ${_gateAllowedLabel(_scanResult!)} | '
-                      'Final boardDetected: ${_scanResult!.boardDetected}',
-                      style: TextStyle(
-                        fontSize: 12,
-                        color: Colors.white.withValues(alpha: 0.8),
-                      ),
-                    ),
-                    if (_isGateFinalMismatch(_scanResult!)) ...[
                       const SizedBox(height: 4),
                       Text(
-                        'gateAllowed != boardDetected',
-                        style: const TextStyle(
-                          fontSize: 12,
-                          color: Colors.amberAccent,
+                        'screen_board ${protocolCounts['screen_board'] ?? 0}/$_fieldProtocolBucketTarget | '
+                        'screen_no_board ${protocolCounts['screen_no_board'] ?? 0}/$_fieldProtocolBucketTarget',
+                        style: TextStyle(
+                          fontSize: 11,
+                          color: Colors.white.withValues(alpha: 0.70),
                         ),
                       ),
-                    ],
-                    const SizedBox(height: 8),
-                    if (_scanResult!.boardDetected)
                       Text(
-                        'Detected corners: ${_formatCorners(_scanResult)}',
+                        'photo_real_board ${protocolCounts['photo_real_board'] ?? 0}/$_fieldProtocolBucketTarget | '
+                        'photo_real_no_board ${protocolCounts['photo_real_no_board'] ?? 0}/$_fieldProtocolBucketTarget',
                         style: TextStyle(
-                          fontSize: 12,
-                          color: Colors.white.withValues(alpha: 0.8),
+                          fontSize: 11,
+                          color: Colors.white.withValues(alpha: 0.70),
                         ),
-                      )
-                    else
+                      ),
+                      const SizedBox(height: 8),
                       Text(
-                        'No board detected: quad hidden',
+                        'Attendu: domaine',
                         style: TextStyle(
                           fontSize: 12,
                           color: Colors.white.withValues(alpha: 0.75),
                         ),
                       ),
-                    const SizedBox(height: 8),
-                    SelectableText(
-                      'Detector debug: ${_scanResult!.detectorDebug}',
-                      style: TextStyle(
-                        fontSize: 12,
-                        color: Colors.white.withValues(alpha: 0.8),
+                      const SizedBox(height: 6),
+                      Wrap(
+                        spacing: 8,
+                        runSpacing: 8,
+                        children: [
+                          ChoiceChip(
+                            label: const Text('screen'),
+                            selected:
+                                _fieldExpectedDomain ==
+                                _FieldExpectedDomain.screen,
+                            onSelected: (selected) {
+                              if (!selected) {
+                                return;
+                              }
+                              setState(
+                                () => _fieldExpectedDomain =
+                                    _FieldExpectedDomain.screen,
+                              );
+                            },
+                          ),
+                          ChoiceChip(
+                            label: const Text('photo_real'),
+                            selected:
+                                _fieldExpectedDomain ==
+                                _FieldExpectedDomain.photoReal,
+                            onSelected: (selected) {
+                              if (!selected) {
+                                return;
+                              }
+                              setState(
+                                () => _fieldExpectedDomain =
+                                    _FieldExpectedDomain.photoReal,
+                              );
+                            },
+                          ),
+                        ],
                       ),
-                    ),
-                  ],
-                ),
-              ),
-              const SizedBox(height: 12),
-              _SectionCard(
-                title: 'Manual correction',
-                subtitle: 'Tap a square then select a piece',
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Wrap(
-                      spacing: 10,
-                      runSpacing: 10,
-                      children: [
-                        OutlinedButton.icon(
-                          onPressed: () => setState(() => _flipped = !_flipped),
-                          icon: const Icon(Icons.flip_camera_android_outlined),
-                          label: const Text('Flip board'),
+                      const SizedBox(height: 8),
+                      Text(
+                        'Attendu: classe',
+                        style: TextStyle(
+                          fontSize: 12,
+                          color: Colors.white.withValues(alpha: 0.75),
                         ),
+                      ),
+                      const SizedBox(height: 6),
+                      Wrap(
+                        spacing: 8,
+                        runSpacing: 8,
+                        children: [
+                          ChoiceChip(
+                            label: const Text('board'),
+                            selected:
+                                _fieldExpectedClass ==
+                                _FieldExpectedClass.board,
+                            onSelected: (selected) {
+                              if (!selected) {
+                                return;
+                              }
+                              setState(
+                                () => _fieldExpectedClass =
+                                    _FieldExpectedClass.board,
+                              );
+                            },
+                          ),
+                          ChoiceChip(
+                            label: const Text('no_board'),
+                            selected:
+                                _fieldExpectedClass ==
+                                _FieldExpectedClass.noBoard,
+                            onSelected: (selected) {
+                              if (!selected) {
+                                return;
+                              }
+                              setState(
+                                () => _fieldExpectedClass =
+                                    _FieldExpectedClass.noBoard,
+                              );
+                            },
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 10),
+                      Wrap(
+                        spacing: 8,
+                        runSpacing: 8,
+                        children: [
+                          FilledButton.icon(
+                            onPressed: _scanResult == null
+                                ? null
+                                : _recordCurrentScanToFieldProtocol,
+                            icon: const Icon(
+                              Icons.playlist_add_check_circle_outlined,
+                            ),
+                            label: const Text('Log scan courant'),
+                          ),
+                          OutlinedButton.icon(
+                            onPressed: _fieldTestEntries.isEmpty
+                                ? null
+                                : _copyFieldProtocolReport,
+                            icon: const Icon(Icons.copy_all_outlined),
+                            label: const Text('Copier report'),
+                          ),
+                          OutlinedButton.icon(
+                            onPressed: _fieldTestEntries.isEmpty
+                                ? null
+                                : _copyLatestFalsePositiveLog,
+                            icon: const Icon(Icons.warning_amber_outlined),
+                            label: const Text('Copier FP'),
+                          ),
+                          OutlinedButton.icon(
+                            onPressed: _fieldTestEntries.isEmpty
+                                ? null
+                                : _copyLatestFalseNegativeLog,
+                            icon: const Icon(Icons.error_outline),
+                            label: const Text('Copier FN'),
+                          ),
+                          OutlinedButton.icon(
+                            onPressed: _fieldTestEntries.isEmpty
+                                ? null
+                                : _clearFieldProtocolEntries,
+                            icon: const Icon(Icons.delete_outline),
+                            label: const Text('Vider'),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 8),
+                      Text(
+                        'FP=$protocolFalsePositives | FN=$protocolFalseNegatives',
+                        style: TextStyle(
+                          fontSize: 11,
+                          color: Colors.white.withValues(alpha: 0.70),
+                        ),
+                      ),
+                      if (protocolLatestLines.isNotEmpty) ...[
+                        const SizedBox(height: 8),
+                        SelectableText(
+                          protocolLatestLines.join('\n'),
+                          style: TextStyle(
+                            fontSize: 11,
+                            color: Colors.white.withValues(alpha: 0.8),
+                          ),
+                        ),
+                      ],
+                    ],
+                  ),
+                ),
+                if (_datasetReport != null) ...[
+                  const SizedBox(height: 12),
+                  _SectionCard(
+                    title: 'Dataset validation',
+                    subtitle:
+                        'Excellent ${_datasetReport!.excellentPassedCount}/${_datasetReport!.total} - '
+                        'Quality ${_datasetReport!.qualityPassedCount}/${_datasetReport!.total} - '
+                        'Functional ${_datasetReport!.functionalPassedCount}/${_datasetReport!.total}',
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        DropdownButton<String>(
+                          isExpanded: true,
+                          value: _selectedEvaluation?.testCase.id,
+                          items: _datasetReport!.evaluations
+                              .map(
+                                (e) => DropdownMenuItem<String>(
+                                  value: e.testCase.id,
+                                  child: Text(
+                                    '${e.testCase.id}  ${e.statusLabel}',
+                                  ),
+                                ),
+                              )
+                              .toList(growable: false),
+                          onChanged: (id) {
+                            if (id == null) {
+                              return;
+                            }
+                            _hydrateSelectedEvaluation(id);
+                          },
+                        ),
+                        const SizedBox(height: 8),
                         OutlinedButton.icon(
-                          onPressed: _scanResult == null
+                          onPressed:
+                              (_selectedEvaluation == null ||
+                                  _isLoadingSelectedEvaluation ||
+                                  _isRunningDatasetValidation ||
+                                  _isAutoFillingAllExpected)
                               ? null
-                              : () => setState(() {
-                                  _editablePosition =
-                                      _scanResult!.detectedPosition;
-                                  _refreshFenAndValidation();
-                                }),
-                          icon: const Icon(Icons.restart_alt),
-                          label: const Text('Reset to detected'),
+                              : () => _hydrateSelectedEvaluation(
+                                  _selectedEvaluation!.testCase.id,
+                                ),
+                          icon: _isLoadingSelectedEvaluation
+                              ? const SizedBox.square(
+                                  dimension: 14,
+                                  child: CircularProgressIndicator(
+                                    strokeWidth: 2,
+                                  ),
+                                )
+                              : const Icon(Icons.replay_outlined),
+                          label: const Text('Validate selected case'),
+                        ),
+                        const SizedBox(height: 8),
+                        OutlinedButton.icon(
+                          onPressed:
+                              (_isRunningDatasetValidation ||
+                                  _isLoadingSelectedEvaluation ||
+                                  _isAutoFillingAllExpected)
+                              ? null
+                              : _autoFillExpectedForAllCases,
+                          icon: _isAutoFillingAllExpected
+                              ? const SizedBox.square(
+                                  dimension: 14,
+                                  child: CircularProgressIndicator(
+                                    strokeWidth: 2,
+                                  ),
+                                )
+                              : const Icon(Icons.copy_all_outlined),
+                          label: const Text('Auto-fill all + copy JSON'),
+                        ),
+                        const SizedBox(height: 8),
+                        OutlinedButton.icon(
+                          onPressed:
+                              (_isRunningDatasetValidation ||
+                                  _isLoadingSelectedEvaluation)
+                              ? null
+                              : _copyValidationTextReport,
+                          icon: const Icon(Icons.text_snippet_outlined),
+                          label: const Text('Copy validation text report'),
+                        ),
+                        if (_selectedEvaluation != null) ...[
+                          Text('Status: ${_selectedEvaluation!.statusLabel}'),
+                          Text('Image: ${_selectedEvaluation!.testCase.image}'),
+                          if (_selectedEvaluation!.result != null)
+                            Text(
+                              'Detector debug: ${_selectedEvaluation!.result!.detectorDebug}',
+                              style: TextStyle(
+                                fontSize: 12,
+                                color: Colors.white.withValues(alpha: 0.80),
+                              ),
+                            ),
+                          Text(
+                            'Compared fields: ${_selectedEvaluation!.comparisons.length}',
+                          ),
+                          if (_selectedEvaluation!.cornerErrorMetrics !=
+                              null) ...[
+                            Builder(
+                              builder: (context) {
+                                final metrics =
+                                    _selectedEvaluation!.cornerErrorMetrics!;
+                                final meanPercent = metrics.meanPercent;
+                                final maxPercent = metrics.maxPercent;
+                                Color color;
+                                String level;
+                                if (meanPercent < 4.0 && maxPercent < 8.0) {
+                                  color = Colors.lightGreenAccent;
+                                  level = 'excellent';
+                                } else if (meanPercent < 8.0 &&
+                                    maxPercent < 15.0) {
+                                  color = Colors.amberAccent;
+                                  level = 'acceptable';
+                                } else {
+                                  color = Colors.redAccent;
+                                  level = 'to_fix';
+                                }
+
+                                return Text(
+                                  'Corner error: mean ${metrics.meanPx.toStringAsFixed(1)} px '
+                                  '(${meanPercent.toStringAsFixed(2)}%), '
+                                  'max ${metrics.maxPx.toStringAsFixed(1)} px '
+                                  '(${metrics.maxPercent.toStringAsFixed(2)}%) '
+                                  '[$level]',
+                                  style: TextStyle(fontSize: 12, color: color),
+                                );
+                              },
+                            ),
+                          ],
+                          if (_selectedEvaluation!.error != null)
+                            Text(
+                              'Error: ${_selectedEvaluation!.error}',
+                              style: const TextStyle(color: Colors.redAccent),
+                            ),
+                          ..._selectedEvaluation!.comparisons.map(
+                            (c) => Text(
+                              '${c.field}: expected=${c.expected} detected=${c.detected} '
+                              '${c.matched ? "OK" : "KO"}',
+                              style: TextStyle(
+                                color: c.matched
+                                    ? Colors.white.withValues(alpha: 0.9)
+                                    : Colors.redAccent,
+                                fontSize: 12,
+                              ),
+                            ),
+                          ),
+                          const SizedBox(height: 8),
+                          OutlinedButton.icon(
+                            onPressed:
+                                (_selectedEvaluation!.result == null ||
+                                    _isAutoFillingAllExpected)
+                                ? null
+                                : _autoFillExpectedForSelectedCase,
+                            icon: const Icon(Icons.auto_fix_high_outlined),
+                            label: const Text('Auto-fill expected'),
+                          ),
+                          const SizedBox(height: 10),
+                          Text(
+                            'Corner annotator (${_manualCorners.length}/4) '
+                            'order: ${_datasetReport!.dataset.pointOrder}',
+                            style: TextStyle(
+                              fontSize: 12,
+                              color: Colors.white.withValues(alpha: 0.80),
+                            ),
+                          ),
+                          const SizedBox(height: 8),
+                          if (imageBytes != null && _selectedImageSize != null)
+                            _CornerAnnotator(
+                              bytes: imageBytes,
+                              imageSize: _selectedImageSize!,
+                              corners: _manualCorners,
+                              onTapImage: _onManualCornerTapped,
+                            )
+                          else if (imageBytes != null)
+                            Text(
+                              'Loading image metadata...',
+                              style: TextStyle(
+                                fontSize: 12,
+                                color: Colors.white.withValues(alpha: 0.70),
+                              ),
+                            ),
+                          const SizedBox(height: 8),
+                          Wrap(
+                            spacing: 8,
+                            runSpacing: 8,
+                            children: [
+                              OutlinedButton.icon(
+                                onPressed: _manualCorners.isEmpty
+                                    ? null
+                                    : _undoManualCorner,
+                                icon: const Icon(Icons.undo),
+                                label: const Text('Undo'),
+                              ),
+                              OutlinedButton.icon(
+                                onPressed: _manualCorners.isEmpty
+                                    ? null
+                                    : _clearManualCorners,
+                                icon: const Icon(Icons.clear),
+                                label: const Text('Clear'),
+                              ),
+                              OutlinedButton.icon(
+                                onPressed: _copyManualCornersJson,
+                                icon: const Icon(Icons.copy_all_outlined),
+                                label: const Text('Copy corners JSON'),
+                              ),
+                            ],
+                          ),
+                          if (_manualCorners.isNotEmpty) ...[
+                            const SizedBox(height: 8),
+                            SelectableText(
+                              _manualCornersJson(),
+                              style: const TextStyle(fontSize: 12),
+                            ),
+                          ],
+                        ],
+                      ],
+                    ),
+                  ),
+                ],
+                if (imageBytes != null) ...[
+                  const SizedBox(height: 12),
+                  _SectionCard(
+                    title: 'Source preview',
+                    subtitle:
+                        '${_selectedImage?.path}\nDomain: ${_captureDomainLabel(_selectedCaptureDomain)}',
+                    child: _ImagePreview(bytes: imageBytes),
+                  ),
+                ],
+                if (_errorMessage != null) ...[
+                  const SizedBox(height: 12),
+                  Text(
+                    _errorMessage!,
+                    style: const TextStyle(color: Colors.redAccent),
+                  ),
+                ],
+                if (_scanResult != null) ...[
+                  const SizedBox(height: 12),
+                  _SectionCard(
+                    title: 'Detected board',
+                    subtitle:
+                        'OpenCV final verdict: board=${_scanResult!.boardDetected} '
+                        'corners=${_scanResult!.geometry.corners.length}/4',
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        if (rectifiedBytes != null)
+                          _ImagePreview(bytes: rectifiedBytes),
+                        const SizedBox(height: 8),
+                        Text(
+                          'Gate allowed: ${_gateAllowedLabel(_scanResult!)} | '
+                          'Final boardDetected: ${_scanResult!.boardDetected}',
+                          style: TextStyle(
+                            fontSize: 12,
+                            color: Colors.white.withValues(alpha: 0.8),
+                          ),
+                        ),
+                        if (_isGateFinalMismatch(_scanResult!)) ...[
+                          const SizedBox(height: 4),
+                          Text(
+                            'gateAllowed != boardDetected',
+                            style: const TextStyle(
+                              fontSize: 12,
+                              color: Colors.amberAccent,
+                            ),
+                          ),
+                        ],
+                        const SizedBox(height: 8),
+                        if (_scanResult!.boardDetected)
+                          Text(
+                            'Detected corners: ${_formatCorners(_scanResult)}',
+                            style: TextStyle(
+                              fontSize: 12,
+                              color: Colors.white.withValues(alpha: 0.8),
+                            ),
+                          )
+                        else
+                          Text(
+                            'No board detected: quad hidden',
+                            style: TextStyle(
+                              fontSize: 12,
+                              color: Colors.white.withValues(alpha: 0.75),
+                            ),
+                          ),
+                        const SizedBox(height: 8),
+                        SelectableText(
+                          'Detector debug: ${_scanResult!.detectorDebug}',
+                          style: TextStyle(
+                            fontSize: 12,
+                            color: Colors.white.withValues(alpha: 0.8),
+                          ),
                         ),
                       ],
                     ),
-                    const SizedBox(height: 10),
-                    if (_editablePosition != null)
-                      BoardCorrectionEditor(
-                        position: _editablePosition!,
-                        squareMapper: _squareMapper,
-                        flipped: _flipped,
-                        onSquareTap: _editSquare,
-                      ),
-                    const SizedBox(height: 10),
-                    if (_validation.errors.isNotEmpty)
-                      ..._validation.errors.map(
-                        (e) => Text(
-                          'Error: $e',
-                          style: const TextStyle(color: Colors.redAccent),
-                        ),
-                      ),
-                    if (_validation.warnings.isNotEmpty)
-                      ..._validation.warnings.map(
-                        (w) => Text(
-                          'Warning: $w',
-                          style: const TextStyle(color: Colors.amberAccent),
-                        ),
-                      ),
-                    const SizedBox(height: 10),
-                    SelectableText(
-                      _finalFen ?? '',
-                      style: const TextStyle(fontSize: 13),
-                    ),
-                    const SizedBox(height: 10),
-                    Wrap(
-                      spacing: 10,
-                      runSpacing: 10,
+                  ),
+                  const SizedBox(height: 12),
+                  _SectionCard(
+                    title: 'Manual correction',
+                    subtitle: 'Tap a square then select a piece',
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        FilledButton.icon(
-                          onPressed: _finalFen == null
-                              ? null
-                              : () {
-                                  Clipboard.setData(
-                                    ClipboardData(text: _finalFen!),
-                                  );
-                                  ScaffoldMessenger.of(context).showSnackBar(
-                                    const SnackBar(content: Text('FEN copied')),
-                                  );
-                                },
-                          icon: const Icon(Icons.copy_all_outlined),
-                          label: const Text('Copy FEN'),
+                        Wrap(
+                          spacing: 10,
+                          runSpacing: 10,
+                          children: [
+                            OutlinedButton.icon(
+                              onPressed: () =>
+                                  setState(() => _flipped = !_flipped),
+                              icon: const Icon(
+                                Icons.flip_camera_android_outlined,
+                              ),
+                              label: const Text('Flip board'),
+                            ),
+                            OutlinedButton.icon(
+                              onPressed: _scanResult == null
+                                  ? null
+                                  : () => setState(() {
+                                      _editablePosition =
+                                          _scanResult!.detectedPosition;
+                                      _refreshFenAndValidation();
+                                    }),
+                              icon: const Icon(Icons.restart_alt),
+                              label: const Text('Reset to detected'),
+                            ),
+                          ],
                         ),
-                        FilledButton.icon(
-                          onPressed: (_finalFen == null || !_validation.isValid)
-                              ? null
-                              : _openAnalysis,
-                          icon: const Icon(Icons.analytics_outlined),
-                          label: const Text('Open analysis'),
+                        const SizedBox(height: 10),
+                        if (_editablePosition != null)
+                          BoardCorrectionEditor(
+                            position: _editablePosition!,
+                            squareMapper: _squareMapper,
+                            flipped: _flipped,
+                            onSquareTap: _editSquare,
+                          ),
+                        const SizedBox(height: 10),
+                        if (_validation.errors.isNotEmpty)
+                          ..._validation.errors.map(
+                            (e) => Text(
+                              'Error: $e',
+                              style: const TextStyle(color: Colors.redAccent),
+                            ),
+                          ),
+                        if (_validation.warnings.isNotEmpty)
+                          ..._validation.warnings.map(
+                            (w) => Text(
+                              'Warning: $w',
+                              style: const TextStyle(color: Colors.amberAccent),
+                            ),
+                          ),
+                        const SizedBox(height: 10),
+                        SelectableText(
+                          _finalFen ?? '',
+                          style: const TextStyle(fontSize: 13),
+                        ),
+                        const SizedBox(height: 10),
+                        Wrap(
+                          spacing: 10,
+                          runSpacing: 10,
+                          children: [
+                            FilledButton.icon(
+                              onPressed: _finalFen == null
+                                  ? null
+                                  : () {
+                                      Clipboard.setData(
+                                        ClipboardData(text: _finalFen!),
+                                      );
+                                      ScaffoldMessenger.of(
+                                        context,
+                                      ).showSnackBar(
+                                        const SnackBar(
+                                          content: Text('FEN copied'),
+                                        ),
+                                      );
+                                    },
+                              icon: const Icon(Icons.copy_all_outlined),
+                              label: const Text('Copy FEN'),
+                            ),
+                            FilledButton.icon(
+                              onPressed:
+                                  (_finalFen == null || !_validation.isValid)
+                                  ? null
+                                  : _openAnalysis,
+                              icon: const Icon(Icons.analytics_outlined),
+                              label: const Text('Open analysis'),
+                            ),
+                          ],
                         ),
                       ],
                     ),
-                  ],
+                  ),
+                  const SizedBox(height: 12),
+                  _SectionCard(
+                    title: 'MVP notes',
+                    child: const Text(
+                      'Current version uses an OpenCV + statistical hybrid corner detector.\n'
+                      'TODO(scan-v2): native OpenCV quadrilateral detection + perspective warp.\n'
+                      'TODO(scan-v2): On-device piece classifier (TFLite/LiteRT).\n'
+                      'Architecture is already split to allow these upgrades.',
+                    ),
+                  ),
+                ],
+              ],
+            ),
+            if (_isScanning)
+              const Positioned.fill(
+                child: AbsorbPointer(
+                  absorbing: true,
+                  child: ColoredBox(
+                    color: Color(0x00000000),
+                    child: Center(child: CircularProgressIndicator()),
+                  ),
                 ),
               ),
-              const SizedBox(height: 12),
-              _SectionCard(
-                title: 'MVP notes',
-                child: const Text(
-                  'Current version uses an OpenCV + statistical hybrid corner detector.\n'
-                  'TODO(scan-v2): native OpenCV quadrilateral detection + perspective warp.\n'
-                  'TODO(scan-v2): On-device piece classifier (TFLite/LiteRT).\n'
-                  'Architecture is already split to allow these upgrades.',
-                ),
-              ),
-            ],
           ],
         ),
       ),
