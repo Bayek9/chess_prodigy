@@ -22,6 +22,7 @@ const _screenRejectThreshold = 0.57;
 
 const _screenOpenCvMinBoardConfidence = 0.30;
 const _screenOpenCvMinBoardConfidenceLineFallback = 0.34;
+const _screenStrongAcceptRescueOpenCvMinBoardConfidence = 0.22;
 const _screenMinPostWarpGridness = 0.11;
 const _screenGridnessRescueMinPostWarpGridness = 0.08;
 
@@ -33,6 +34,8 @@ const _alternateBypassMinBoardAreaRatio = 0.16;
 const _gridnessRescueMinBoardQuality = 0.30;
 const _gridnessRescueMinBoardConfidence = 0.35;
 const _gridnessRescueMinBoardAreaRatio = 0.12;
+const _strongAcceptNoBoardRescueMinAreaRatio = 0.12;
+const _strongAcceptNoBoardRescueMinEdgeFrame = 0.55;
 const _defaultRegressionSuite = String.fromEnvironment(
   'REGRESSION_SUITE',
   defaultValue: 'core',
@@ -84,6 +87,21 @@ void main() {
       boardPresenceModelAssetPath: _screenModelAsset,
       useFallbackForReject: false,
       openCvMinBoardConfidence: _screenOpenCvMinBoardConfidence,
+      openCvMinBoardConfidenceLineFallback:
+          _screenOpenCvMinBoardConfidenceLineFallback,
+      minPostWarpGridness: _screenMinPostWarpGridness,
+    );
+
+    final screenUseCaseStrongAcceptRescue = DefaultScanPipelineFactory.create(
+      validator: validator,
+      fenBuilder: fenBuilder,
+      useBoardPresenceGate: true,
+      boardPresenceThreshold: _screenAcceptThreshold,
+      boardPresenceRejectThreshold: _screenRejectThreshold,
+      boardPresenceModelAssetPath: _screenModelAsset,
+      useFallbackForReject: false,
+      openCvMinBoardConfidence:
+          _screenStrongAcceptRescueOpenCvMinBoardConfidence,
       openCvMinBoardConfidenceLineFallback:
           _screenOpenCvMinBoardConfidenceLineFallback,
       minPostWarpGridness: _screenMinPostWarpGridness,
@@ -191,6 +209,7 @@ void main() {
       var alternateRanWithoutGate = false;
       var switchedToAlternate = false;
       var switchedToGridnessRescue = false;
+      var switchedToStrongAcceptNoBoardRescue = false;
       bool? alternateBypassQualityPass;
       if (shouldRetryAlternate && retries < maxRetries) {
         retryCount += 1;
@@ -236,6 +255,7 @@ void main() {
               currentGateDecisionRaw == 'bypass_no_gate') &&
           _passesGridnessRescuePrecheck(finalResult);
       bool? gridnessRescueQualityPass;
+      bool? strongAcceptNoBoardRescueQualityPass;
       if (shouldRetryGridnessRescue) {
         retryCount += 1;
         retries += 1;
@@ -251,6 +271,30 @@ void main() {
         }
       }
 
+      final shouldRetryStrongAcceptNoBoardRescue =
+          retries < maxRetries &&
+          finalDomain == 'screen' &&
+          currentGateDecisionRaw == 'allow_strong_accept' &&
+          !finalResult.boardDetected &&
+          _isRejectedNoBoard(finalResult.detectorDebug);
+      if (shouldRetryStrongAcceptNoBoardRescue) {
+        retryCount += 1;
+        retries += 1;
+        final rescueWatch = Stopwatch()..start();
+        final rescueResult = await screenUseCaseStrongAcceptRescue.execute(
+          image,
+        );
+        rescueWatch.stop();
+        tAltMs += rescueWatch.elapsedMilliseconds;
+        strongAcceptNoBoardRescueQualityPass =
+            _passesStrongAcceptNoBoardRescueGate(rescueResult);
+        if (rescueResult.boardDetected &&
+            strongAcceptNoBoardRescueQualityPass) {
+          finalResult = rescueResult;
+          finalDomain = 'screen';
+          switchedToStrongAcceptNoBoardRescue = true;
+        }
+      }
       var gateRaw = _extractGateDecisionRaw(finalResult.detectorDebug);
       var finalDecisionRaw = _extractFinalDecisionRaw(
         finalResult.detectorDebug,
@@ -258,13 +302,17 @@ void main() {
       String? bypassReason;
       if (alternateRanWithoutGate &&
           switchedToAlternate &&
-          !switchedToGridnessRescue) {
+          !switchedToGridnessRescue &&
+          !switchedToStrongAcceptNoBoardRescue) {
         gateRaw = 'bypass_no_gate';
         finalDecisionRaw = 'bypass_no_gate';
         bypassReason = 'primary_allow_strong_accept_detector_failed';
       }
       if (switchedToGridnessRescue) {
         bypassReason = 'gridness_rescue_post_warp_gridness';
+      }
+      if (switchedToStrongAcceptNoBoardRescue) {
+        bypassReason = 'strong_accept_rejected_no_board_rescue';
       }
       final decision = _decisionBucket(finalResult.detectorDebug);
       final expectedBoard = c.expectedClass == 'board';
@@ -316,6 +364,12 @@ void main() {
         'gridness_rescue_attempted': shouldRetryGridnessRescue,
         'gridness_rescue_quality_pass': gridnessRescueQualityPass,
         'gridness_rescue_switched': switchedToGridnessRescue,
+        'strong_accept_noboard_rescue_attempted':
+            shouldRetryStrongAcceptNoBoardRescue,
+        'strong_accept_noboard_rescue_quality_pass':
+            strongAcceptNoBoardRescueQualityPass,
+        'strong_accept_noboard_rescue_switched':
+            switchedToStrongAcceptNoBoardRescue,
         'bypass_reason': bypassReason,
         'post_warp_gridness': _extractMetric(
           finalResult.detectorDebug,
@@ -343,6 +397,10 @@ void main() {
         'board_regularity': _extractMetric(
           finalResult.detectorDebug,
           'board_regularity',
+        ),
+        'board_edge_frame': _extractMetric(
+          finalResult.detectorDebug,
+          'board_edge_frame',
         ),
         'board_area_ratio': _extractMetric(
           finalResult.detectorDebug,
@@ -652,6 +710,25 @@ bool _passesGridnessRescuePrecheck(ScanPipelineResult result) {
   return quality >= _gridnessRescueMinBoardQuality &&
       confidence >= _gridnessRescueMinBoardConfidence &&
       areaRatio >= _gridnessRescueMinBoardAreaRatio;
+}
+
+bool _passesStrongAcceptNoBoardRescueGate(ScanPipelineResult result) {
+  if (!result.boardDetected) {
+    return false;
+  }
+  final areaRatio = _extractMetric(result.detectorDebug, 'board_area_ratio');
+  final edgeFrame = _extractMetric(result.detectorDebug, 'board_edge_frame');
+  if (areaRatio == null || edgeFrame == null) {
+    return false;
+  }
+  return areaRatio >= _strongAcceptNoBoardRescueMinAreaRatio &&
+      edgeFrame >= _strongAcceptNoBoardRescueMinEdgeFrame;
+}
+
+bool _isRejectedNoBoard(String detectorDebug) {
+  return detectorDebug.contains('which_path_won=rejected_no_board') ||
+      (detectorDebug.contains('board_rejected=true') &&
+          detectorDebug.contains('rejected_no_board'));
 }
 
 String _extractGateDecisionRaw(String detectorDebug) {

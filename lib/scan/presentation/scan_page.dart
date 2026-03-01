@@ -188,6 +188,7 @@ class _ScanPageState extends State<ScanPage> {
   static const double _screenRejectThreshold = 0.57;
   static const double _screenOpenCvMinBoardConfidence = 0.30;
   static const double _screenOpenCvMinBoardConfidenceLineFallback = 0.34;
+  static const double _screenStrongAcceptRescueOpenCvMinBoardConfidence = 0.22;
   static const double _screenLooseRetryStrongProbability = 0.55;
   static const double _screenLooseOpenCvMinBoardConfidence = 0.20;
   static const double _screenLooseOpenCvMinBoardConfidenceLineFallback = 0.24;
@@ -201,6 +202,8 @@ class _ScanPageState extends State<ScanPage> {
   static const double _gridnessRescueMinBoardQuality = 0.30;
   static const double _gridnessRescueMinBoardConfidence = 0.35;
   static const double _gridnessRescueMinBoardAreaRatio = 0.12;
+  static const double _strongAcceptNoBoardRescueMinAreaRatio = 0.12;
+  static const double _strongAcceptNoBoardRescueMinEdgeFrame = 0.55;
   static const int _fieldProtocolBucketTarget = 10;
   static const int _fieldProtocolTotalTarget = 40;
   static const String _photoBoardModelAssetPath =
@@ -219,6 +222,7 @@ class _ScanPageState extends State<ScanPage> {
   final PositionValidator _validator = const BasicPositionValidator();
   late final ScanPositionUseCase _scanUseCasePhotoReal;
   late final ScanPositionUseCase _scanUseCaseScreen;
+  late final ScanPositionUseCase _scanUseCaseScreenStrongAcceptRescue;
   late final ScanPositionUseCase _scanUseCaseScreenLoose;
   late final ScanPositionUseCase _scanUseCaseScreenGridnessRescue;
   late final ScanPositionUseCase _scanUseCasePhotoRealNoGate;
@@ -303,6 +307,20 @@ class _ScanPageState extends State<ScanPage> {
       boardPresenceModelAssetPath: _screenBoardModelAssetPath,
       useFallbackForReject: false,
       openCvMinBoardConfidence: _screenOpenCvMinBoardConfidence,
+      openCvMinBoardConfidenceLineFallback:
+          _screenOpenCvMinBoardConfidenceLineFallback,
+      minPostWarpGridness: _screenMinPostWarpGridness,
+    );
+    _scanUseCaseScreenStrongAcceptRescue = DefaultScanPipelineFactory.create(
+      validator: _validator,
+      fenBuilder: _fenBuilder,
+      useBoardPresenceGate: true,
+      boardPresenceThreshold: _screenAcceptThreshold,
+      boardPresenceRejectThreshold: _screenRejectThreshold,
+      boardPresenceModelAssetPath: _screenBoardModelAssetPath,
+      useFallbackForReject: false,
+      openCvMinBoardConfidence:
+          _screenStrongAcceptRescueOpenCvMinBoardConfidence,
       openCvMinBoardConfidenceLineFallback:
           _screenOpenCvMinBoardConfidenceLineFallback,
       minPostWarpGridness: _screenMinPostWarpGridness,
@@ -539,6 +557,39 @@ class _ScanPageState extends State<ScanPage> {
         routingDebug =
             '$routingDebug gridness_rescue=true '
             'gridness_min=${_screenGridnessRescueMinPostWarpGridness.toStringAsFixed(3)} '
+            'rescue_switched=$rescueSwitched '
+            'rescue_quality_pass=$rescueQualityPass '
+            'rescue_board=${rescueResult.boardDetected} '
+            'rescue_ms=$rescueMs '
+            'retry_count=$retries/$maxRetries';
+      }
+      final shouldRetryStrongAcceptNoBoardRescue =
+          retries < maxRetries &&
+          resolvedDomain == _ScanCaptureDomain.screen &&
+          currentGateDecisionRaw == 'allow_strong_accept' &&
+          !result.boardDetected &&
+          _isRejectedNoBoard(result.detectorDebug);
+      if (shouldRetryStrongAcceptNoBoardRescue) {
+        retries += 1;
+        final rescueStopwatch = Stopwatch()..start();
+        final rescueResult = await _scanUseCaseScreenStrongAcceptRescue.execute(
+          image,
+        );
+        rescueStopwatch.stop();
+        final rescueMs = rescueStopwatch.elapsedMilliseconds;
+        alternateScanMs += rescueMs;
+        final rescueQualityPass = _passesStrongAcceptNoBoardRescueGate(
+          rescueResult,
+        );
+        final rescueSwitched = rescueResult.boardDetected && rescueQualityPass;
+        if (rescueSwitched) {
+          result = rescueResult;
+          finalUsedBypassNoGate = false;
+          bypassReason = 'strong_accept_rejected_no_board_rescue';
+        }
+        routingDebug =
+            '$routingDebug strong_accept_noboard_rescue=true '
+            'rescue_conf=${_screenStrongAcceptRescueOpenCvMinBoardConfidence.toStringAsFixed(3)} '
             'rescue_switched=$rescueSwitched '
             'rescue_quality_pass=$rescueQualityPass '
             'rescue_board=${rescueResult.boardDetected} '
@@ -901,6 +952,31 @@ class _ScanPageState extends State<ScanPage> {
     return quality >= _gridnessRescueMinBoardQuality &&
         confidence >= _gridnessRescueMinBoardConfidence &&
         areaRatio >= _gridnessRescueMinBoardAreaRatio;
+  }
+
+  bool _passesStrongAcceptNoBoardRescueGate(ScanPipelineResult result) {
+    if (!result.boardDetected) {
+      return false;
+    }
+    final areaRatio = _extractDetectorMetric(
+      result.detectorDebug,
+      'board_area_ratio',
+    );
+    final edgeFrame = _extractDetectorMetric(
+      result.detectorDebug,
+      'board_edge_frame',
+    );
+    if (areaRatio == null || edgeFrame == null) {
+      return false;
+    }
+    return areaRatio >= _strongAcceptNoBoardRescueMinAreaRatio &&
+        edgeFrame >= _strongAcceptNoBoardRescueMinEdgeFrame;
+  }
+
+  bool _isRejectedNoBoard(String detectorDebug) {
+    return detectorDebug.contains('which_path_won=rejected_no_board') ||
+        (detectorDebug.contains('board_rejected=true') &&
+            detectorDebug.contains('rejected_no_board'));
   }
 
   double? _extractBoardQuality(String detectorDebug) {
