@@ -9,13 +9,17 @@ import ar.fgsoruco.opencv4.factory.miscellaneous.DistanceTransformFactory
 import ar.fgsoruco.opencv4.factory.miscellaneous.RefineBoardCornersFactory
 import ar.fgsoruco.opencv4.factory.miscellaneous.ThresholdFactory
 
+import android.os.Handler
+import android.os.Looper
 import io.flutter.embedding.engine.plugins.FlutterPlugin
 import io.flutter.plugin.common.MethodCall
 import io.flutter.plugin.common.MethodChannel
 import io.flutter.plugin.common.MethodChannel.MethodCallHandler
 import io.flutter.plugin.common.MethodChannel.Result
+import io.flutter.plugin.common.StandardMethodCodec
 import org.opencv.android.OpenCVLoader
 import org.opencv.core.Core
+import java.util.concurrent.atomic.AtomicBoolean
 
 /** Opencv_4Plugin */
 class Opencv4Plugin: FlutterPlugin, MethodCallHandler {
@@ -25,13 +29,21 @@ class Opencv4Plugin: FlutterPlugin, MethodCallHandler {
   /// This local reference serves to register the plugin with the Flutter Engine and unregister it
   /// when the Flutter Engine is detached from the Activity
   private lateinit var channel : MethodChannel
+  private val mainHandler = Handler(Looper.getMainLooper())
 
   override fun onAttachedToEngine(@NonNull flutterPluginBinding: FlutterPlugin.FlutterPluginBinding) {
-    channel = MethodChannel(flutterPluginBinding.binaryMessenger, "opencv_4")
+    val taskQueue = flutterPluginBinding.binaryMessenger.makeBackgroundTaskQueue()
+    channel = MethodChannel(
+      flutterPluginBinding.binaryMessenger,
+      "opencv_4",
+      StandardMethodCodec.INSTANCE,
+      taskQueue
+    )
     channel.setMethodCallHandler(this)
   }
 
-  override fun onMethodCall(@NonNull call: MethodCall, @NonNull result: Result) {
+  override fun onMethodCall(@NonNull call: MethodCall, @NonNull rawResult: Result) {
+    val result: Result = MainThreadResult(rawResult, mainHandler)
     if (!OpenCVFLag) {
       if (!OpenCVLoader.initDebug()) {
         println("Error on load OpenCV")
@@ -337,5 +349,34 @@ class Opencv4Plugin: FlutterPlugin, MethodCallHandler {
 
   override fun onDetachedFromEngine(@NonNull binding: FlutterPlugin.FlutterPluginBinding) {
     channel.setMethodCallHandler(null)
+  }
+  private class MainThreadResult(
+    private val delegate: Result,
+    private val mainHandler: Handler
+  ) : Result {
+    private val replied = AtomicBoolean(false)
+
+    override fun success(result: Any?) {
+      postReply { delegate.success(result) }
+    }
+
+    override fun error(errorCode: String, errorMessage: String?, errorDetails: Any?) {
+      postReply { delegate.error(errorCode, errorMessage, errorDetails) }
+    }
+
+    override fun notImplemented() {
+      postReply { delegate.notImplemented() }
+    }
+
+    private inline fun postReply(crossinline block: () -> Unit) {
+      if (!replied.compareAndSet(false, true)) {
+        return
+      }
+      if (Looper.myLooper() == Looper.getMainLooper()) {
+        block()
+      } else {
+        mainHandler.post { block() }
+      }
+    }
   }
 }
