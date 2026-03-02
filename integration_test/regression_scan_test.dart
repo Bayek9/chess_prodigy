@@ -22,7 +22,8 @@ const _screenRejectThreshold = 0.57;
 
 const _screenOpenCvMinBoardConfidence = 0.30;
 const _screenOpenCvMinBoardConfidenceLineFallback = 0.34;
-const _screenStrongAcceptRescueOpenCvMinBoardConfidence = 0.22;
+const _screenStrongAcceptRescueOpenCvMinBoardConfidence = 0.16;
+const _screenStrongAcceptRescueOpenCvMinBoardConfidenceLineFallback = 0.26;
 const _screenMinPostWarpGridness = 0.11;
 const _screenGridnessRescueMinPostWarpGridness = 0.08;
 
@@ -34,11 +35,15 @@ const _alternateBypassMinBoardAreaRatio = 0.16;
 const _gridnessRescueMinBoardQuality = 0.30;
 const _gridnessRescueMinBoardConfidence = 0.35;
 const _gridnessRescueMinBoardAreaRatio = 0.12;
-const _strongAcceptNoBoardRescueMinAreaRatio = 0.12;
-const _strongAcceptNoBoardRescueMinEdgeFrame = 0.55;
+const _strongAcceptNoBoardRescueMinAreaRatio = 0.10;
+const _strongAcceptNoBoardRescueMinEdgeFrame = 0.50;
 const _defaultRegressionSuite = String.fromEnvironment(
   'REGRESSION_SUITE',
   defaultValue: 'core',
+);
+const _regressionOnly = String.fromEnvironment(
+  'REGRESSION_ONLY',
+  defaultValue: '',
 );
 
 void main() {
@@ -50,6 +55,18 @@ void main() {
         ? 'assets/regression_holdout/cases.json'
         : 'assets/regression/cases.json';
     final cases = await _loadCases(casesAssetPath, suite: suite);
+    final onlyRaw = _regressionOnly.trim();
+    final onlySet = onlyRaw.isEmpty
+        ? null
+        : onlyRaw
+              .split(',')
+              .map((entry) => entry.trim())
+              .where((entry) => entry.isNotEmpty)
+              .toSet();
+    debugPrint(
+      '[regression][config] suite=$suite '
+      'REGRESSION_ONLY=${onlyRaw.isEmpty ? "<all>" : onlyRaw}',
+    );
     if (cases.isEmpty) {
       debugPrint('[regression] no cases in $casesAssetPath (suite=$suite)');
       expect(true, isTrue);
@@ -103,8 +120,9 @@ void main() {
       openCvMinBoardConfidence:
           _screenStrongAcceptRescueOpenCvMinBoardConfidence,
       openCvMinBoardConfidenceLineFallback:
-          _screenOpenCvMinBoardConfidenceLineFallback,
+          _screenStrongAcceptRescueOpenCvMinBoardConfidenceLineFallback,
       minPostWarpGridness: _screenMinPostWarpGridness,
+      openCvRescueMode: true,
     );
 
     final screenUseCaseGridnessRescue = DefaultScanPipelineFactory.create(
@@ -145,6 +163,9 @@ void main() {
     var retryCount = 0;
 
     for (final c in cases) {
+      if (onlySet != null && !onlySet.contains(c.id)) {
+        continue;
+      }
       final imageBytes = await _loadAssetBytes(c.assetPath);
       if (imageBytes == null) {
         final missing = <String, Object?>{
@@ -286,6 +307,35 @@ void main() {
         );
         rescueWatch.stop();
         tAltMs += rescueWatch.elapsedMilliseconds;
+        String fmt(double? value) =>
+            value == null ? 'na' : value.toStringAsFixed(3);
+        final rescueArea = _extractMetric(
+          rescueResult.detectorDebug,
+          'board_area_ratio',
+        );
+        final rescueEdge = _extractMetric(
+          rescueResult.detectorDebug,
+          'board_edge_frame',
+        );
+        final rescueConf = _extractMetric(
+          rescueResult.detectorDebug,
+          'board_confidence',
+        );
+        final rescueChecker = _extractMetric(
+          rescueResult.detectorDebug,
+          'board_checker',
+        );
+        final rescueCombined = _extractMetric(
+          rescueResult.detectorDebug,
+          'board_quality',
+        );
+        final rescueReject = _extractRejectReason(rescueResult.detectorDebug);
+        debugPrint(
+          '[regression][sa_rescue] id=${c.id} board=${rescueResult.boardDetected} '
+          'area=${fmt(rescueArea)} edge=${fmt(rescueEdge)} '
+          'conf=${fmt(rescueConf)} chk=${fmt(rescueChecker)} comb=${fmt(rescueCombined)} '
+          'path=${_extractWhichPath(rescueResult.detectorDebug)} reject=$rescueReject',
+        );
         strongAcceptNoBoardRescueQualityPass =
             _passesStrongAcceptNoBoardRescueGate(rescueResult);
         if (rescueResult.boardDetected &&
@@ -407,6 +457,7 @@ void main() {
           'board_area_ratio',
         ),
         'which_path_won': _extractWhichPath(finalResult.detectorDebug),
+        'reject_reason': _extractRejectReason(finalResult.detectorDebug),
       };
 
       entries.add(entry);
@@ -775,6 +826,14 @@ double? _extractMetric(String detectorDebug, String key) {
 
 String _extractWhichPath(String detectorDebug) {
   final match = RegExp(r'which_path_won=([^\s]+)').firstMatch(detectorDebug);
+  if (match == null || match.groupCount < 1) {
+    return 'unknown';
+  }
+  return match.group(1)!;
+}
+
+String _extractRejectReason(String detectorDebug) {
+  final match = RegExp(r'reject=([^\s]+)').firstMatch(detectorDebug);
   if (match == null || match.groupCount < 1) {
     return 'unknown';
   }
