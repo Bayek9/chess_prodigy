@@ -67,9 +67,11 @@ void main() {
 
   testWidgets('regression scan runner', (tester) async {
     final suite = _normalizedSuiteName(_defaultRegressionSuite);
-    final casesAssetPath = suite == 'holdout'
-        ? 'assets/regression_holdout/cases.json'
-        : 'assets/regression/cases.json';
+    final casesAssetPath = switch (suite) {
+      'holdout' => 'assets/regression_holdout/cases.json',
+      'extended' => 'assets/regression_extended/cases.json',
+      _ => 'assets/regression/cases.json',
+    };
     final cases = await _loadCases(casesAssetPath, suite: suite);
     final onlyRaw = _regressionOnly.trim();
     final onlySet = onlyRaw.isEmpty
@@ -677,12 +679,16 @@ Future<List<_RegressionCase>> _loadCases(
 
 String _resolveAssetPath(String rawPath, {required String suite}) {
   final normalized = rawPath.replaceAll('\\', '/');
-  final assetRoot = suite == 'holdout'
-      ? 'assets/regression_holdout/images'
-      : 'assets/regression/images';
-  final toolRoot = suite == 'holdout'
-      ? 'tools/regression/holdout/images/'
-      : 'tools/regression/images/';
+  final assetRoot = switch (suite) {
+    'holdout' => 'assets/regression_holdout/images',
+    'extended' => 'assets/regression_extended/images',
+    _ => 'assets/regression/images',
+  };
+  final toolRoot = switch (suite) {
+    'holdout' => 'tools/regression/holdout/images/',
+    'extended' => 'tools/regression/extended/images/',
+    _ => 'tools/regression/images/',
+  };
 
   if (normalized.startsWith('assets/')) {
     return normalized;
@@ -957,6 +963,8 @@ String _normalizedSuiteName(String raw) {
   switch (raw) {
     case 'holdout':
       return 'holdout';
+    case 'extended':
+      return 'extended';
     case 'core':
     default:
       return 'core';

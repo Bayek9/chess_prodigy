@@ -73,6 +73,10 @@ flutter:
     - assets/regression/
     - assets/scan_samples/images/
     - assets/regression/images/
+    - assets/regression_holdout/
+    - assets/regression_holdout/images/
+    - assets/regression_extended/
+    - assets/regression_extended/images/
     - assets/scan_models/
 
   # An image asset can refer to one or more resolution-specific "variants", see
@@ -105,3 +109,4 @@ dependency_overrides:
     path: packages/simple_chess_board
   opencv_4:
     path: packages/opencv_4
+
