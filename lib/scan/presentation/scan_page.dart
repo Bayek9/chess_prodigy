@@ -207,15 +207,20 @@ class _ScanPageState extends State<ScanPage> {
   static const Set<String> _retryableRejectReasons = <String>{
     'no_line_low_checker_combined',
     'line_low_combined',
-    'line_small_area_low_edge',
     'confidence_below_min',
   };
   static const Set<String> _strongAcceptNoBoardRescueRetryableRejectReasons =
       <String>{
         'no_line_low_checker_combined',
         'line_low_combined',
-        'line_small_area_low_edge',
         'confidence_below_min',
+      };
+  static const Set<String> _strongAcceptAlternateRetryableRejectReasons =
+      <String>{
+        'no_line_low_checker_combined',
+        'line_low_combined',
+        'confidence_below_min',
+        'none',
       };
   static const int _fieldProtocolBucketTarget = 10;
   static const int _fieldProtocolTotalTarget = 40;
@@ -484,20 +489,27 @@ class _ScanPageState extends State<ScanPage> {
       final primaryRetryableReject = _isRetryableRejectReason(
         primaryRejectReason,
       );
+      final primaryStrongAcceptRetryable =
+          primaryGateRaw == 'allow_strong_accept' &&
+          _isRetryableRejectReason(
+            primaryRejectReason,
+            allowed: _strongAcceptAlternateRetryableRejectReasons,
+          );
       var alternateScanMs = 0;
       var routingDebug = routing.reason;
 
       var retries = 0;
       const maxRetries = 2;
+      final routingSuggestsAlternate =
+          routing.ambiguous ||
+          ((routing.alternateScore ?? double.negativeInfinity) >=
+              _autoRoutingAlternateRetryMinScore);
       final shouldRetryAlternate =
           routing.isAuto &&
           !result.boardDetected &&
           routing.alternateDomain != null &&
-          (routing.ambiguous ||
-              ((routing.alternateScore ?? double.negativeInfinity) >=
-                  _autoRoutingAlternateRetryMinScore) ||
-              primaryGateRaw == 'allow_strong_accept') &&
-          (primaryGateRaw == 'allow_strong_accept' || primaryRetryableReject);
+          ((routingSuggestsAlternate && primaryRetryableReject) ||
+              primaryStrongAcceptRetryable);
       var finalUsedBypassNoGate = false;
       var usedGridnessRescue = false;
       String? bypassReason;
