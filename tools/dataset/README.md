@@ -135,6 +135,34 @@ python tools/dataset/import_board_binary_archives.py `
   --max-no-board-per-archive 2000
 ```
 
+## 4.2) Import external piece archives (2D + real)
+
+Use this helper to merge:
+
+- 2D YOLO boards (`chess_yolo_data...zip`) -> 64 square crops auto-labeled (`empty` + 12 pieces)
+- Real piece crops (`chess_pieces.zip`) -> mapped labels (`white_*`/`black_*` -> `w*`/`b*`)
+
+```powershell
+python tools/dataset/import_piece_archives.py `
+  --yolo-archive "C:\Users\samib\Downloads\chess_yolo_data-20250419T135412Z-002.zip" `
+  --real-archive "C:\Users\samib\Downloads\chess_pieces.zip" `
+  --output-dir datasets/piece_classifier_external `
+  --max-yolo-boards 2500 `
+  --max-real-per-class 0
+```
+
+Outputs:
+
+- `datasets/piece_classifier_external/piece_crops/{train,val,test}/{label}/*.png`
+- `datasets/piece_classifier_external/labels/piece_samples.csv`
+- `datasets/piece_classifier_external/labels/import_summary.json`
+
+Note:
+
+- Default YOLO class-id mapping is `bB,bK,bN,bP,bQ,bR,wB,wK,wN,wP,wQ,wR`.
+- Override with `--yolo-class-map` if your archive uses a different order.
+
+
 ## 5) Train board/no-board and export TFLite
 
 Install training dependencies:
