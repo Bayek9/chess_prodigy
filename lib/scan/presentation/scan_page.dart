@@ -204,6 +204,19 @@ class _ScanPageState extends State<ScanPage> {
   static const double _gridnessRescueMinBoardQuality = 0.30;
   static const double _gridnessRescueMinBoardConfidence = 0.35;
   static const double _gridnessRescueMinBoardAreaRatio = 0.12;
+  static const Set<String> _retryableRejectReasons = <String>{
+    'no_line_low_checker_combined',
+    'line_low_combined',
+    'line_small_area_low_edge',
+    'confidence_below_min',
+  };
+  static const Set<String> _strongAcceptNoBoardRescueRetryableRejectReasons =
+      <String>{
+        'no_line_low_checker_combined',
+        'line_low_combined',
+        'line_small_area_low_edge',
+        'confidence_below_min',
+      };
   static const int _fieldProtocolBucketTarget = 10;
   static const int _fieldProtocolTotalTarget = 40;
   static const String _photoBoardModelAssetPath =
@@ -467,6 +480,10 @@ class _ScanPageState extends State<ScanPage> {
       final primaryGateRaw = _gateDecisionRawFromDetectorDebug(
         result.detectorDebug,
       );
+      final primaryRejectReason = _extractRejectReason(result.detectorDebug);
+      final primaryRetryableReject = _isRetryableRejectReason(
+        primaryRejectReason,
+      );
       var alternateScanMs = 0;
       var routingDebug = routing.reason;
 
@@ -479,7 +496,8 @@ class _ScanPageState extends State<ScanPage> {
           (routing.ambiguous ||
               ((routing.alternateScore ?? double.negativeInfinity) >=
                   _autoRoutingAlternateRetryMinScore) ||
-              primaryGateRaw == 'allow_strong_accept');
+              primaryGateRaw == 'allow_strong_accept') &&
+          (primaryGateRaw == 'allow_strong_accept' || primaryRetryableReject);
       var finalUsedBypassNoGate = false;
       var usedGridnessRescue = false;
       String? bypassReason;
@@ -564,12 +582,17 @@ class _ScanPageState extends State<ScanPage> {
             'rescue_ms=$rescueMs '
             'retry_count=$retries/$maxRetries';
       }
+      final currentRejectReason = _extractRejectReason(result.detectorDebug);
       final shouldRetryStrongAcceptNoBoardRescue =
           retries < maxRetries &&
           resolvedDomain == _ScanCaptureDomain.screen &&
           currentGateDecisionRaw == 'allow_strong_accept' &&
           !result.boardDetected &&
-          _isRejectedNoBoard(result.detectorDebug);
+          _isRejectedNoBoard(result.detectorDebug) &&
+          _isRetryableRejectReason(
+            currentRejectReason,
+            allowed: _strongAcceptNoBoardRescueRetryableRejectReasons,
+          );
       if (shouldRetryStrongAcceptNoBoardRescue) {
         retries += 1;
         final rescueStopwatch = Stopwatch()..start();
@@ -1034,6 +1057,16 @@ class _ScanPageState extends State<ScanPage> {
       return 'unknown';
     }
     return match.group(1)!;
+  }
+
+  bool _isRetryableRejectReason(
+    String reason, {
+    Set<String> allowed = _retryableRejectReasons,
+  }) {
+    if (reason == 'unknown') {
+      return false;
+    }
+    return allowed.contains(reason);
   }
 
   bool _isGateFinalMismatch(ScanPipelineResult result) {
