@@ -37,6 +37,18 @@ const _gridnessRescueMinBoardConfidence = 0.35;
 const _gridnessRescueMinBoardAreaRatio = 0.12;
 const _strongAcceptNoBoardRescueMinAreaRatio = 0.10;
 const _strongAcceptNoBoardRescueMinEdgeFrame = 0.50;
+const _retryableRejectReasons = <String>{
+  'no_line_low_checker_combined',
+  'line_low_combined',
+  'line_small_area_low_edge',
+  'confidence_below_min',
+};
+const _strongAcceptNoBoardRescueRetryableRejectReasons = <String>{
+  'no_line_low_checker_combined',
+  'line_low_combined',
+  'line_small_area_low_edge',
+  'confidence_below_min',
+};
 const _defaultRegressionSuite = String.fromEnvironment(
   'REGRESSION_SUITE',
   defaultValue: 'core',
@@ -160,7 +172,8 @@ void main() {
     var tn = 0;
     var fp = 0;
     var fn = 0;
-    var retryCount = 0;
+    var retryImages = 0;
+    var altRuns = 0;
 
     for (final c in cases) {
       if (onlySet != null && !onlySet.contains(c.id)) {
@@ -217,15 +230,23 @@ void main() {
       final primaryGateRaw = _extractGateDecisionRaw(
         primaryResult.detectorDebug,
       );
+      final primaryRejectReason = _extractRejectReason(
+        primaryResult.detectorDebug,
+      );
+      final primaryRetryableReject = _isRetryableRejectReason(
+        primaryRejectReason,
+      );
       var retries = 0;
       const maxRetries = 2;
+      var altAttempts = 0;
       final shouldRetryAlternate =
           !primaryResult.boardDetected &&
           alternateUseCase != null &&
           (routing.ambiguous ||
               ((routing.alternateScore ?? double.negativeInfinity) >=
                   _autoRoutingAlternateRetryMinScore) ||
-              primaryGateRaw == 'allow_strong_accept');
+              primaryGateRaw == 'allow_strong_accept') &&
+          (primaryGateRaw == 'allow_strong_accept' || primaryRetryableReject);
 
       var alternateRanWithoutGate = false;
       var switchedToAlternate = false;
@@ -233,7 +254,8 @@ void main() {
       var switchedToStrongAcceptNoBoardRescue = false;
       bool? alternateBypassQualityPass;
       if (shouldRetryAlternate && retries < maxRetries) {
-        retryCount += 1;
+        altRuns += 1;
+        altAttempts += 1;
         retries += 1;
         final retryAlternateWithoutGate =
             primaryGateRaw == 'allow_strong_accept';
@@ -278,7 +300,8 @@ void main() {
       bool? gridnessRescueQualityPass;
       bool? strongAcceptNoBoardRescueQualityPass;
       if (shouldRetryGridnessRescue) {
-        retryCount += 1;
+        altRuns += 1;
+        altAttempts += 1;
         retries += 1;
         final rescueWatch = Stopwatch()..start();
         final rescueResult = await screenUseCaseGridnessRescue.execute(image);
@@ -297,9 +320,14 @@ void main() {
           finalDomain == 'screen' &&
           currentGateDecisionRaw == 'allow_strong_accept' &&
           !finalResult.boardDetected &&
-          _isRejectedNoBoard(finalResult.detectorDebug);
+          _isRejectedNoBoard(finalResult.detectorDebug) &&
+          _isRetryableRejectReason(
+            _extractRejectReason(finalResult.detectorDebug),
+            allowed: _strongAcceptNoBoardRescueRetryableRejectReasons,
+          );
       if (shouldRetryStrongAcceptNoBoardRescue) {
-        retryCount += 1;
+        altRuns += 1;
+        altAttempts += 1;
         retries += 1;
         final rescueWatch = Stopwatch()..start();
         final rescueResult = await screenUseCaseStrongAcceptRescue.execute(
@@ -367,6 +395,10 @@ void main() {
       final decision = _decisionBucket(finalResult.detectorDebug);
       final expectedBoard = c.expectedClass == 'board';
       final boardDetected = finalResult.boardDetected;
+      final didRetry = altAttempts > 0;
+      if (didRetry) {
+        retryImages += 1;
+      }
 
       final outcome = expectedBoard
           ? (boardDetected ? 'TP' : 'FN')
@@ -409,6 +441,8 @@ void main() {
         'outcome': outcome,
         't_primary_ms': tPrimaryMs,
         't_alt_ms': tAltMs,
+        'alt_attempts': altAttempts,
+        'did_retry': didRetry,
         'alternate_ran_without_gate': alternateRanWithoutGate,
         'alternate_bypass_quality_pass': alternateBypassQualityPass,
         'gridness_rescue_attempted': shouldRetryGridnessRescue,
@@ -465,7 +499,7 @@ void main() {
     }
 
     final total = tp + tn + fp + fn;
-    final retryRate = total == 0 ? 0.0 : (retryCount * 100.0 / total);
+    final retryRate = total == 0 ? 0.0 : (retryImages * 100.0 / total);
 
     final report = <String, Object?>{
       'generated_at': DateTime.now().toIso8601String(),
@@ -475,14 +509,15 @@ void main() {
       'tn': tn,
       'fp': fp,
       'fn': fn,
-      'retry_count': retryCount,
+      'retry_count': retryImages,
+      'alt_runs': altRuns,
       'retry_rate': double.parse(retryRate.toStringAsFixed(1)),
       'entries': entries,
     };
 
     debugPrint(
       '[regression][summary] total=$total tp=$tp tn=$tn fp=$fp fn=$fn '
-      'retry_count=$retryCount retry_rate=${retryRate.toStringAsFixed(1)}',
+      'retry_count=$retryImages alt_runs=$altRuns retry_rate=${retryRate.toStringAsFixed(1)}',
     );
     debugPrint('[regression][json] ${jsonEncode(report)}');
 
@@ -838,6 +873,16 @@ String _extractRejectReason(String detectorDebug) {
     return 'unknown';
   }
   return match.group(1)!;
+}
+
+bool _isRetryableRejectReason(
+  String reason, {
+  Set<String> allowed = _retryableRejectReasons,
+}) {
+  if (reason == 'unknown') {
+    return false;
+  }
+  return allowed.contains(reason);
 }
 
 String _normalizedSuiteName(String raw) {
