@@ -188,7 +188,9 @@ class _ScanPageState extends State<ScanPage> {
   static const double _screenRejectThreshold = 0.57;
   static const double _screenOpenCvMinBoardConfidence = 0.30;
   static const double _screenOpenCvMinBoardConfidenceLineFallback = 0.34;
-  static const double _screenStrongAcceptRescueOpenCvMinBoardConfidence = 0.22;
+  static const double _screenStrongAcceptRescueOpenCvMinBoardConfidence = 0.16;
+  static const double
+  _screenStrongAcceptRescueOpenCvMinBoardConfidenceLineFallback = 0.26;
   static const double _screenLooseRetryStrongProbability = 0.55;
   static const double _screenLooseOpenCvMinBoardConfidence = 0.20;
   static const double _screenLooseOpenCvMinBoardConfidenceLineFallback = 0.24;
@@ -202,8 +204,6 @@ class _ScanPageState extends State<ScanPage> {
   static const double _gridnessRescueMinBoardQuality = 0.30;
   static const double _gridnessRescueMinBoardConfidence = 0.35;
   static const double _gridnessRescueMinBoardAreaRatio = 0.12;
-  static const double _strongAcceptNoBoardRescueMinAreaRatio = 0.12;
-  static const double _strongAcceptNoBoardRescueMinEdgeFrame = 0.55;
   static const int _fieldProtocolBucketTarget = 10;
   static const int _fieldProtocolTotalTarget = 40;
   static const String _photoBoardModelAssetPath =
@@ -322,8 +322,9 @@ class _ScanPageState extends State<ScanPage> {
       openCvMinBoardConfidence:
           _screenStrongAcceptRescueOpenCvMinBoardConfidence,
       openCvMinBoardConfidenceLineFallback:
-          _screenOpenCvMinBoardConfidenceLineFallback,
+          _screenStrongAcceptRescueOpenCvMinBoardConfidenceLineFallback,
       minPostWarpGridness: _screenMinPostWarpGridness,
+      openCvRescueMode: true,
     );
     _scanUseCaseScreenLoose = DefaultScanPipelineFactory.create(
       validator: _validator,
@@ -578,6 +579,36 @@ class _ScanPageState extends State<ScanPage> {
         rescueStopwatch.stop();
         final rescueMs = rescueStopwatch.elapsedMilliseconds;
         alternateScanMs += rescueMs;
+        if (!kReleaseMode) {
+          String fmt(double? value) =>
+              value == null ? 'na' : value.toStringAsFixed(3);
+          final rescueArea = _extractDetectorMetric(
+            rescueResult.detectorDebug,
+            'board_area_ratio',
+          );
+          final rescueEdge = _extractDetectorMetric(
+            rescueResult.detectorDebug,
+            'board_edge_frame',
+          );
+          final rescueConf = _extractBoardConfidence(
+            rescueResult.detectorDebug,
+          );
+          final rescueChecker = _extractDetectorMetric(
+            rescueResult.detectorDebug,
+            'board_checker',
+          );
+          final rescueCombined = _extractBoardQuality(
+            rescueResult.detectorDebug,
+          );
+          final rescueReject = _extractRejectReason(rescueResult.detectorDebug);
+          final rescuePath = _extractWhichPathWon(rescueResult.detectorDebug);
+          debugPrint(
+            '[scan][sa_rescue] board=${rescueResult.boardDetected} '
+            'area=${fmt(rescueArea)} edge=${fmt(rescueEdge)} '
+            'conf=${fmt(rescueConf)} chk=${fmt(rescueChecker)} comb=${fmt(rescueCombined)} '
+            'path=$rescuePath reject=$rescueReject',
+          );
+        }
         final rescueQualityPass = _passesStrongAcceptNoBoardRescueGate(
           rescueResult,
         );
@@ -958,19 +989,11 @@ class _ScanPageState extends State<ScanPage> {
     if (!result.boardDetected) {
       return false;
     }
-    final areaRatio = _extractDetectorMetric(
-      result.detectorDebug,
-      'board_area_ratio',
-    );
-    final edgeFrame = _extractDetectorMetric(
-      result.detectorDebug,
-      'board_edge_frame',
-    );
-    if (areaRatio == null || edgeFrame == null) {
-      return false;
-    }
-    return areaRatio >= _strongAcceptNoBoardRescueMinAreaRatio &&
-        edgeFrame >= _strongAcceptNoBoardRescueMinEdgeFrame;
+    final areaRatio =
+        _extractDetectorMetric(result.detectorDebug, 'board_area_ratio') ?? 0.0;
+    final edgeFrame =
+        _extractDetectorMetric(result.detectorDebug, 'board_edge_frame') ?? 0.0;
+    return areaRatio >= 0.10 && edgeFrame >= 0.50;
   }
 
   bool _isRejectedNoBoard(String detectorDebug) {
@@ -995,6 +1018,22 @@ class _ScanPageState extends State<ScanPage> {
       return null;
     }
     return double.tryParse(match.group(1)!);
+  }
+
+  String _extractWhichPathWon(String detectorDebug) {
+    final match = RegExp(r'which_path_won=([^\s]+)').firstMatch(detectorDebug);
+    if (match == null || match.groupCount < 1) {
+      return 'unknown';
+    }
+    return match.group(1)!;
+  }
+
+  String _extractRejectReason(String detectorDebug) {
+    final match = RegExp(r'reject=([^\s]+)').firstMatch(detectorDebug);
+    if (match == null || match.groupCount < 1) {
+      return 'unknown';
+    }
+    return match.group(1)!;
   }
 
   bool _isGateFinalMismatch(ScanPipelineResult result) {

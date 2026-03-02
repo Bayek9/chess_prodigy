@@ -27,6 +27,7 @@ class OpenCvHybridBoardDetector implements BoardDetector {
     this.useLightPreprocessSet = false,
     this.minBoardConfidence = 0.20,
     this.minBoardConfidenceLineFallback = 0.24,
+    this.rescueMode = false,
   }) : _fallback = fallback ?? const StatisticalBoardDetector();
 
   final BoardDetector _fallback;
@@ -37,6 +38,7 @@ class OpenCvHybridBoardDetector implements BoardDetector {
   final bool useLightPreprocessSet;
   final double minBoardConfidence;
   final double minBoardConfidenceLineFallback;
+  final bool rescueMode;
 
   @override
   Future<BoardGeometry> detect(ScanInputImage image) async {
@@ -139,7 +141,7 @@ class OpenCvHybridBoardDetector implements BoardDetector {
         decoded: decoded,
         geometry: best.geometry,
       );
-      final rejected = !_passesBoardDetectedGate(
+      final rejectReason = _boardRejectReason(
         decoded: decoded,
         geometry: best.geometry,
         quality: quality,
@@ -148,6 +150,7 @@ class OpenCvHybridBoardDetector implements BoardDetector {
         forcedProfileAccepted: false,
         sideBalance: sideBalance,
       );
+      final rejected = rejectReason != null;
       final areaRatio =
           _quadArea(best.geometry.corners) /
           math.max(1.0, (decoded.width * decoded.height).toDouble());
@@ -166,6 +169,7 @@ class OpenCvHybridBoardDetector implements BoardDetector {
         'board_quality=${quality.combined.toStringAsFixed(3)} '
         'board_side_balance=${sideBalance.toStringAsFixed(3)} '
         'board_rejected=$rejected '
+        'reject=${rejectReason ?? 'none'} '
         'which_path_won=${rejected ? "rejected_no_board" : "baseline"}',
       );
       return finalGeometry;
@@ -532,6 +536,7 @@ class OpenCvHybridBoardDetector implements BoardDetector {
     }
 
     var rejectedNoBoard = false;
+    var boardRejectReason = 'none';
     final finalAreaRatioBeforeGate =
         _quadArea(finalGeometry.corners) /
         math.max(1.0, (decoded.width * decoded.height).toDouble());
@@ -550,7 +555,7 @@ class OpenCvHybridBoardDetector implements BoardDetector {
       decoded: decoded,
       geometry: finalGeometry,
     );
-    if (!_passesBoardDetectedGate(
+    final rejectReason = _boardRejectReason(
       decoded: decoded,
       geometry: finalGeometry,
       quality: finalQualityNow,
@@ -558,8 +563,10 @@ class OpenCvHybridBoardDetector implements BoardDetector {
       lineFallbackAccepted: lineFallbackAccepted,
       forcedProfileAccepted: forcedProfileAccepted,
       sideBalance: finalSideBalance,
-    )) {
+    );
+    if (rejectReason != null) {
       rejectedNoBoard = true;
+      boardRejectReason = rejectReason;
       finalGeometry = const BoardGeometry(corners: <BoardCorner>[]);
       finalScore = 0.0;
       whichPathWon = 'rejected_no_board';
@@ -575,7 +582,7 @@ class OpenCvHybridBoardDetector implements BoardDetector {
         'area_ratio=${finalAreaRatioBeforeGate.toStringAsFixed(4)} '
         'conf=${finalConfidence.toStringAsFixed(4)} '
         'side_balance=${finalSideBalance.toStringAsFixed(4)} '
-        'rejected_no_board=$rejectedNoBoard',
+        'rejected_no_board=$rejectedNoBoard reject=$boardRejectReason',
       );
       debugPrint(
         '[scan][hybrid] quad_initial=${_cornersLabel(best.geometry.corners)} '
@@ -620,6 +627,7 @@ class OpenCvHybridBoardDetector implements BoardDetector {
       'board_quality=${finalQualityNow.combined.toStringAsFixed(3)} '
       'board_side_balance=${finalSideBalance.toStringAsFixed(3)} '
       'board_rejected=$rejectedNoBoard '
+      'reject=$boardRejectReason '
       'which_path_won=$whichPathWon '
       'native_refine=${nativeOutcome.reason} '
       'roi_refine=${roiOutcome.reason}',
@@ -886,7 +894,7 @@ class OpenCvHybridBoardDetector implements BoardDetector {
     return confidence.clamp(0.0, 1.0).toDouble();
   }
 
-  bool _passesBoardDetectedGate({
+  String? _boardRejectReason({
     required _DecodedLuma decoded,
     required BoardGeometry geometry,
     required _GeometryQualitySummary quality,
@@ -896,73 +904,79 @@ class OpenCvHybridBoardDetector implements BoardDetector {
     required double sideBalance,
   }) {
     if (!geometry.isValid || geometry.corners.length != 4) {
-      return false;
+      return 'invalid_geometry';
     }
     final areaRatio =
         _quadArea(geometry.corners) /
         math.max(1.0, (decoded.width * decoded.height).toDouble());
     if (areaRatio < 0.05) {
-      return false;
+      return 'area_too_small';
     }
     if (areaRatio > 0.95 &&
         quality.checker < 0.22 &&
         quality.edgeFrame < 0.55) {
-      return false;
+      return 'area_too_large_weak_structure';
     }
     final minConfidence = lineFallbackAccepted
         ? minBoardConfidenceLineFallback
         : minBoardConfidence;
     if (confidence < minConfidence) {
-      return false;
+      return 'confidence_below_min';
     }
+    final minLineCombined = rescueMode ? 0.25 : 0.26;
+    final veryStrongFrameRescue =
+        rescueMode && areaRatio >= 0.20 && quality.edgeFrame >= 0.80;
     final strongFramePattern =
         quality.regularity >= 0.38 && quality.edgeFrame >= 0.70;
     if (!lineFallbackAccepted &&
         quality.checker < 0.19 &&
         quality.combined < 0.34 &&
-        !strongFramePattern) {
-      return false;
+        !strongFramePattern &&
+        !veryStrongFrameRescue) {
+      return 'no_line_low_checker_combined';
     }
-    if (lineFallbackAccepted && quality.combined < 0.26) {
-      return false;
+    if (lineFallbackAccepted && quality.combined < minLineCombined) {
+      return 'line_low_combined';
     }
     if (lineFallbackAccepted &&
         quality.checker < 0.08 &&
         quality.regularity < 0.36) {
-      return false;
+      return 'line_low_checker_regularity';
     }
     if (lineFallbackAccepted && areaRatio < 0.08) {
-      return false;
+      return 'line_area_too_small';
     }
-    // Partial-board rejection for line-fallback candidates: large coverage
-    // with weak checker parity tends to be demi-board false positives.
     if (lineFallbackAccepted && quality.checker < 0.17 && areaRatio > 0.22) {
-      return false;
+      return 'line_large_area_low_checker';
     }
-    // Anti-FP guard for line-fallback on small, weak-structure quads.
-    if (lineFallbackAccepted && areaRatio < 0.16 && quality.edgeFrame < 0.60) {
-      return false;
+    final minLineSmallArea = rescueMode ? 0.12 : 0.16;
+    final minLineSmallEdge = rescueMode ? 0.50 : 0.60;
+    if (lineFallbackAccepted &&
+        areaRatio < minLineSmallArea &&
+        quality.edgeFrame < minLineSmallEdge) {
+      return 'line_small_area_low_edge';
     }
     if (forcedProfileAccepted &&
         confidence < 0.30 &&
         quality.edgeFrame < 0.60) {
-      return false;
+      return 'forced_profile_low_conf_edge';
     }
-    // Partial-board rejection: one side much weaker than others on warp.
     if (confidence < 0.33 && sideBalance < 0.16) {
-      return false;
+      return 'low_side_balance';
     }
     if (confidence < 0.24 && sideBalance < 0.20 && quality.regularity < 0.38) {
-      return false;
+      return 'low_conf_low_side_balance_regularity';
     }
+    final strongFramePatternForFinal =
+        quality.regularity >= 0.38 && quality.edgeFrame >= 0.70;
     if (!lineFallbackAccepted &&
         quality.checker < 0.30 &&
         confidence < 0.28 &&
         sideBalance < 0.22 &&
-        !strongFramePattern) {
-      return false;
+        !strongFramePatternForFinal) {
+      return 'no_line_low_checker_conf_side_balance';
     }
-    return true;
+    return null;
   }
 
   double _edgeSideBalanceScore({

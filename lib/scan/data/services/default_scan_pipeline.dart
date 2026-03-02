@@ -44,6 +44,7 @@ class DefaultScanPipelineFactory {
     double openCvMinBoardConfidence = 0.20,
     double openCvMinBoardConfidenceLineFallback = 0.24,
     double minPostWarpGridness = 0.0,
+    bool openCvRescueMode = false,
   }) {
     final fallbackDetector = const StatisticalBoardDetector();
     final boardPresenceClassifier = useBoardPresenceGate
@@ -63,6 +64,7 @@ class DefaultScanPipelineFactory {
               minBoardConfidence: openCvMinBoardConfidence,
               minBoardConfidenceLineFallback:
                   openCvMinBoardConfidenceLineFallback,
+              rescueMode: openCvRescueMode,
             )
           : fallbackDetector,
       rectifier: const MockBoardRectifier(),
