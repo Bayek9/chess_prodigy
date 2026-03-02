@@ -40,14 +40,18 @@ const _strongAcceptNoBoardRescueMinEdgeFrame = 0.50;
 const _retryableRejectReasons = <String>{
   'no_line_low_checker_combined',
   'line_low_combined',
-  'line_small_area_low_edge',
   'confidence_below_min',
 };
 const _strongAcceptNoBoardRescueRetryableRejectReasons = <String>{
   'no_line_low_checker_combined',
   'line_low_combined',
-  'line_small_area_low_edge',
   'confidence_below_min',
+};
+const _strongAcceptAlternateRetryableRejectReasons = <String>{
+  'no_line_low_checker_combined',
+  'line_low_combined',
+  'confidence_below_min',
+  'none',
 };
 const _defaultRegressionSuite = String.fromEnvironment(
   'REGRESSION_SUITE',
@@ -174,6 +178,25 @@ void main() {
     var fn = 0;
     var retryImages = 0;
     var altRuns = 0;
+    final retryTriggeredByReason = <String, int>{};
+    final retrySuccessByReason = <String, int>{};
+
+    String normalizeReason(String? reason) {
+      if (reason == null || reason.isEmpty || reason == 'unknown') {
+        return 'unknown';
+      }
+      return reason;
+    }
+
+    void noteRetryTriggered(String? reason) {
+      final key = normalizeReason(reason);
+      retryTriggeredByReason[key] = (retryTriggeredByReason[key] ?? 0) + 1;
+    }
+
+    void noteRetrySuccess(String? reason) {
+      final key = normalizeReason(reason);
+      retrySuccessByReason[key] = (retrySuccessByReason[key] ?? 0) + 1;
+    }
 
     for (final c in cases) {
       if (onlySet != null && !onlySet.contains(c.id)) {
@@ -236,17 +259,24 @@ void main() {
       final primaryRetryableReject = _isRetryableRejectReason(
         primaryRejectReason,
       );
+      final primaryStrongAcceptRetryable =
+          primaryGateRaw == 'allow_strong_accept' &&
+          _isRetryableRejectReason(
+            primaryRejectReason,
+            allowed: _strongAcceptAlternateRetryableRejectReasons,
+          );
       var retries = 0;
       const maxRetries = 2;
       var altAttempts = 0;
+      final routingSuggestsAlternate =
+          routing.ambiguous ||
+          ((routing.alternateScore ?? double.negativeInfinity) >=
+              _autoRoutingAlternateRetryMinScore);
       final shouldRetryAlternate =
           !primaryResult.boardDetected &&
           alternateUseCase != null &&
-          (routing.ambiguous ||
-              ((routing.alternateScore ?? double.negativeInfinity) >=
-                  _autoRoutingAlternateRetryMinScore) ||
-              primaryGateRaw == 'allow_strong_accept') &&
-          (primaryGateRaw == 'allow_strong_accept' || primaryRetryableReject);
+          ((routingSuggestsAlternate && primaryRetryableReject) ||
+              primaryStrongAcceptRetryable);
 
       var alternateRanWithoutGate = false;
       var switchedToAlternate = false;
@@ -254,6 +284,8 @@ void main() {
       var switchedToStrongAcceptNoBoardRescue = false;
       bool? alternateBypassQualityPass;
       if (shouldRetryAlternate && retries < maxRetries) {
+        final alternateRetryReason = primaryRejectReason;
+        noteRetryTriggered(alternateRetryReason);
         altRuns += 1;
         altAttempts += 1;
         retries += 1;
@@ -280,6 +312,7 @@ void main() {
           finalResult = alternateResult;
           finalDomain = routing.alternateDomain!;
           switchedToAlternate = true;
+          noteRetrySuccess(alternateRetryReason);
         }
       }
 
@@ -300,6 +333,8 @@ void main() {
       bool? gridnessRescueQualityPass;
       bool? strongAcceptNoBoardRescueQualityPass;
       if (shouldRetryGridnessRescue) {
+        const gridnessRetryReason = 'reject_post_warp_gridness';
+        noteRetryTriggered(gridnessRetryReason);
         altRuns += 1;
         altAttempts += 1;
         retries += 1;
@@ -312,9 +347,13 @@ void main() {
           finalResult = rescueResult;
           finalDomain = 'screen';
           switchedToGridnessRescue = true;
+          noteRetrySuccess(gridnessRetryReason);
         }
       }
 
+      final strongAcceptRetryReason = _extractRejectReason(
+        finalResult.detectorDebug,
+      );
       final shouldRetryStrongAcceptNoBoardRescue =
           retries < maxRetries &&
           finalDomain == 'screen' &&
@@ -322,10 +361,11 @@ void main() {
           !finalResult.boardDetected &&
           _isRejectedNoBoard(finalResult.detectorDebug) &&
           _isRetryableRejectReason(
-            _extractRejectReason(finalResult.detectorDebug),
+            strongAcceptRetryReason,
             allowed: _strongAcceptNoBoardRescueRetryableRejectReasons,
           );
       if (shouldRetryStrongAcceptNoBoardRescue) {
+        noteRetryTriggered(strongAcceptRetryReason);
         altRuns += 1;
         altAttempts += 1;
         retries += 1;
@@ -371,6 +411,7 @@ void main() {
           finalResult = rescueResult;
           finalDomain = 'screen';
           switchedToStrongAcceptNoBoardRescue = true;
+          noteRetrySuccess(strongAcceptRetryReason);
         }
       }
       var gateRaw = _extractGateDecisionRaw(finalResult.detectorDebug);
@@ -500,6 +541,26 @@ void main() {
 
     final total = tp + tn + fp + fn;
     final retryRate = total == 0 ? 0.0 : (retryImages * 100.0 / total);
+    final retryReasonRows =
+        retryTriggeredByReason.entries
+            .map((entry) {
+              final reason = entry.key;
+              final attempts = entry.value;
+              final success = retrySuccessByReason[reason] ?? 0;
+              final successRate = attempts == 0
+                  ? 0.0
+                  : (success * 100.0 / attempts);
+              return <String, Object>{
+                'reason': reason,
+                'attempts': attempts,
+                'success': success,
+                'success_rate': double.parse(successRate.toStringAsFixed(1)),
+              };
+            })
+            .toList(growable: false)
+          ..sort(
+            (a, b) => (b['attempts'] as int).compareTo(a['attempts'] as int),
+          );
 
     final report = <String, Object?>{
       'generated_at': DateTime.now().toIso8601String(),
@@ -512,6 +573,7 @@ void main() {
       'retry_count': retryImages,
       'alt_runs': altRuns,
       'retry_rate': double.parse(retryRate.toStringAsFixed(1)),
+      'retry_reason_stats': retryReasonRows,
       'entries': entries,
     };
 
@@ -519,6 +581,12 @@ void main() {
       '[regression][summary] total=$total tp=$tp tn=$tn fp=$fp fn=$fn '
       'retry_count=$retryImages alt_runs=$altRuns retry_rate=${retryRate.toStringAsFixed(1)}',
     );
+    for (final row in retryReasonRows) {
+      debugPrint(
+        '[regression][retry_reason] reason=${row['reason']} attempts=${row['attempts']} '
+        'success=${row['success']} success_rate=${row['success_rate']}',
+      );
+    }
     debugPrint('[regression][json] ${jsonEncode(report)}');
 
     expect(entries.isNotEmpty, isTrue);
