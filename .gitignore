@@ -62,3 +62,7 @@ tools/tmp/
 # Generated GT folds
 tools/pieces/gt_v1_folds_k*/
 tools/pieces/gt_*_folds_*/
+# kfold / bootstrap outputs
+models/kfold_gtv1_*/
+models/*/eval_gt_v1_k4_fold*/
+models/*/eval_*_gt_v1*/
