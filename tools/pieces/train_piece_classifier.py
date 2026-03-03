@@ -13,7 +13,7 @@ from __future__ import annotations
 import argparse
 import json
 from pathlib import Path
-from typing import Dict, Iterable, Tuple
+from typing import Dict, Iterable, Optional, Tuple
 
 import numpy as np
 import pandas as pd
@@ -111,7 +111,7 @@ def resolve_columns(df: pd.DataFrame) -> Tuple[str, str, str, str]:
 
 def normalize_source(raw: str) -> str:
     s = str(raw).strip().lower()
-    if s in {"yolo", "yolo_2d", "2d"}:
+    if s in {"yolo", "yolo_2d", "coco_2d", "coco_2d_grid", "2d", "screen_2d"}:
         return "yolo"
     if s in {"real", "real_pieces", "photo"}:
         return "real"
@@ -159,12 +159,32 @@ def build_df(dataset_dir: Path, source: str) -> pd.DataFrame:
     return out
 
 
+def write_clean_manifest(df: pd.DataFrame, out_path: Path) -> None:
+    """Write the post-normalization filtered manifest used by training."""
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    clean = df[["__source", "__split", "__label", "__path", "__abs_path", "__y"]].copy()
+    clean = clean.rename(
+        columns={
+            "__source": "source",
+            "__split": "split",
+            "__label": "label",
+            "__path": "output_path",
+            "__abs_path": "abs_path",
+            "__y": "class_id",
+        }
+    )
+    clean.to_csv(out_path, index=False)
+    print(f"[info] wrote clean manifest: {out_path} ({len(clean)} rows)")
+
+
 def make_tf_dataset(
     df: pd.DataFrame,
     img_size: int,
     batch: int,
     augment: bool,
     shuffle: bool,
+    repeat: bool = False,
+    ignore_decode_errors: bool = False,
 ) -> tf.data.Dataset:
     paths = df["__abs_path"].values.astype(str)
     labels = df["__y"].values.astype(np.int32)
@@ -182,6 +202,9 @@ def make_tf_dataset(
         return img, y
 
     ds = ds.map(_load, num_parallel_calls=tf.data.AUTOTUNE)
+    if ignore_decode_errors:
+        # Skip corrupt/unreadable images instead of aborting the full training run.
+        ds = ds.ignore_errors()
 
     if augment:
         aug = tf.keras.Sequential(
@@ -198,6 +221,9 @@ def make_tf_dataset(
             return aug(img, training=True), y
 
         ds = ds.map(_aug, num_parallel_calls=tf.data.AUTOTUNE)
+
+    if repeat:
+        ds = ds.repeat()
 
     ds = ds.batch(batch).prefetch(tf.data.AUTOTUNE)
     return ds
@@ -219,15 +245,79 @@ def build_model(img_size: int, num_classes: int) -> tf.keras.Model:
     outputs = tf.keras.layers.Dense(num_classes, activation="softmax")(x)
     return tf.keras.Model(inputs, outputs)
 
+def initialize_from_checkpoint(model: tf.keras.Model, init_path: Path) -> None:
+    """Initialize model weights from a previous run (.keras/.h5/weights)."""
+    if not init_path.exists():
+        raise FileNotFoundError(f"init checkpoint not found: {init_path}")
 
-def compute_class_weights(train_df: pd.DataFrame) -> Dict[int, float]:
+    # Keras v3 full-model format (.keras or SavedModel dir).
+    if init_path.suffix.lower() == ".keras" or init_path.is_dir():
+        loaded = tf.keras.models.load_model(str(init_path), compile=False)
+        model.set_weights(loaded.get_weights())
+        print(f"[info] initialized from model: {init_path}")
+        return
+
+    # Weight-only files (e.g. .h5/.ckpt).
+    model.load_weights(str(init_path))
+    print(f"[info] initialized from weights: {init_path}")
+
+
+
+def compute_class_weights(
+    train_df: pd.DataFrame,
+    mode: str,
+    cap: Optional[float],
+) -> Optional[Dict[int, float]]:
+    if mode == "none":
+        return None
+
     counts = train_df["__y"].value_counts().to_dict()
-    total = sum(counts.values())
-    weights: Dict[int, float] = {}
+    total = float(sum(counts.values()))
+
+    raw: Dict[int, float] = {}
     for cls_id in range(len(CLASSES_13)):
-        c = counts.get(cls_id, 1)
-        weights[cls_id] = float(total) / float(len(CLASSES_13) * c)
-    return weights
+        c = float(counts.get(cls_id, 1))
+        inv = total / (float(len(CLASSES_13)) * c)
+        if mode == "inverse":
+            w = inv
+        elif mode == "sqrt":
+            w = float(np.sqrt(inv))
+        else:
+            raise ValueError(f"Unsupported class weight mode: {mode}")
+        raw[cls_id] = w
+
+    # Normalize to mean=1 so lr/optimizer behavior stays comparable across modes.
+    mean_w = sum(raw.values()) / float(len(raw))
+    if mean_w > 0:
+        raw = {k: (v / mean_w) for k, v in raw.items()}
+
+    if cap is not None and cap > 0:
+        raw = {k: min(v, cap) for k, v in raw.items()}
+
+    return raw
+
+
+def sparse_focal_loss(
+    num_classes: int,
+    alpha: float = 0.25,
+    gamma: float = 2.0,
+    from_logits: bool = False,
+):
+    """Sparse-label focal loss using one-hot expansion inside the loss."""
+
+    def loss(y_true: tf.Tensor, y_pred: tf.Tensor) -> tf.Tensor:
+        y_true = tf.cast(tf.reshape(y_true, [-1]), tf.int32)
+
+        if from_logits:
+            y_pred = tf.nn.softmax(y_pred, axis=-1)
+
+        y_true_oh = tf.one_hot(y_true, depth=num_classes)
+        ce = tf.keras.losses.categorical_crossentropy(y_true_oh, y_pred)
+        p_t = tf.reduce_sum(y_true_oh * y_pred, axis=-1)
+        fl = alpha * tf.pow(1.0 - p_t, gamma) * ce
+        return tf.reduce_mean(fl)
+
+    return loss
 
 
 def export_tflite(
@@ -276,9 +366,25 @@ def main() -> None:
     parser.add_argument("--fine-tune-lr", type=float, default=1e-4)
     parser.add_argument("--out-dir", required=True, type=Path)
     parser.add_argument("--export-int8", action="store_true")
+    parser.add_argument("--loss", choices=["sparse_ce", "sparse_focal"], default="sparse_ce")
+    parser.add_argument("--focal-alpha", type=float, default=0.25)
+    parser.add_argument("--focal-gamma", type=float, default=2.0)
+    parser.add_argument("--class-weight-mode", choices=["none", "sqrt", "inverse"], default="sqrt")
+    parser.add_argument("--class-weight-cap", type=float, default=5.0)
+    parser.add_argument("--clean-manifest-out", type=Path)
+    parser.add_argument("--init-from", type=Path, help="Optional checkpoint/model to initialize before training")
+    parser.add_argument("--no-class-weights", action="store_true", help=argparse.SUPPRESS)
+    parser.add_argument(
+        "--ignore-decode-errors",
+        action="store_true",
+        help="Drop unreadable/corrupt images during tf.data loading.",
+    )
     args = parser.parse_args()
 
     df = build_df(args.dataset_dir, args.source)
+
+    if args.clean_manifest_out:
+        write_clean_manifest(df, args.clean_manifest_out)
 
     train_df = df[df["__split"].eq("train")].copy()
     val_df = df[df["__split"].eq("val")].copy()
@@ -292,18 +398,65 @@ def main() -> None:
         f"train={len(train_df)} val={len(val_df)} test={len(test_df)}"
     )
 
-    train_ds = make_tf_dataset(train_df, args.img_size, args.batch, augment=True, shuffle=True)
-    val_ds = make_tf_dataset(val_df, args.img_size, args.batch, augment=False, shuffle=False)
-    test_ds = make_tf_dataset(test_df, args.img_size, args.batch, augment=False, shuffle=False)
+    train_ds = make_tf_dataset(
+        train_df,
+        args.img_size,
+        args.batch,
+        augment=True,
+        shuffle=True,
+        repeat=True,
+        ignore_decode_errors=args.ignore_decode_errors,
+    )
+    val_ds = make_tf_dataset(
+        val_df,
+        args.img_size,
+        args.batch,
+        augment=False,
+        shuffle=False,
+        repeat=False,
+        ignore_decode_errors=args.ignore_decode_errors,
+    )
+    test_ds = make_tf_dataset(
+        test_df,
+        args.img_size,
+        args.batch,
+        augment=False,
+        shuffle=False,
+        repeat=False,
+        ignore_decode_errors=args.ignore_decode_errors,
+    )
+
+    train_steps = max(1, int(np.ceil(len(train_df) / args.batch)))
 
     model = build_model(args.img_size, len(CLASSES_13))
+    if args.init_from:
+        initialize_from_checkpoint(model, args.init_from)
+
+    if args.loss == "sparse_focal":
+        loss_fn = sparse_focal_loss(
+            num_classes=len(CLASSES_13),
+            alpha=args.focal_alpha,
+            gamma=args.focal_gamma,
+            from_logits=False,
+        )
+    else:
+        loss_fn = tf.keras.losses.SparseCategoricalCrossentropy(from_logits=False)
+
     model.compile(
         optimizer=tf.keras.optimizers.Adam(args.lr),
-        loss=tf.keras.losses.SparseCategoricalCrossentropy(),
+        loss=loss_fn,
         metrics=[tf.keras.metrics.SparseCategoricalAccuracy(name="acc")],
     )
 
-    class_weights = compute_class_weights(train_df)
+    class_weight_mode = "none" if args.no_class_weights else args.class_weight_mode
+    if args.loss == "sparse_focal" and class_weight_mode != "none":
+        print("[info] disabling class weights for sparse_focal loss")
+        class_weight_mode = "none"
+    class_weights = compute_class_weights(train_df, class_weight_mode, args.class_weight_cap)
+    print(
+        f"[info] loss={args.loss} focal_alpha={args.focal_alpha} focal_gamma={args.focal_gamma}"
+    )
+    print(f"[info] class_weight_mode={class_weight_mode} cap={args.class_weight_cap}")
 
     ckpt_dir = args.out_dir / "checkpoints"
     ckpt_dir.mkdir(parents=True, exist_ok=True)
@@ -333,26 +486,31 @@ def main() -> None:
         train_ds,
         validation_data=val_ds,
         epochs=args.epochs,
+        steps_per_epoch=train_steps,
         class_weight=class_weights,
         callbacks=callbacks,
     )
 
-    # Fine-tune
-    backbone = model.layers[1]
-    backbone.trainable = True
-    model.compile(
-        optimizer=tf.keras.optimizers.Adam(args.fine_tune_lr),
-        loss=tf.keras.losses.SparseCategoricalCrossentropy(),
-        metrics=[tf.keras.metrics.SparseCategoricalAccuracy(name="acc")],
-    )
+    if args.fine_tune_epochs > 0:
+        # Fine-tune
+        backbone = model.layers[1]
+        backbone.trainable = True
+        model.compile(
+            optimizer=tf.keras.optimizers.Adam(args.fine_tune_lr),
+            loss=loss_fn,
+            metrics=[tf.keras.metrics.SparseCategoricalAccuracy(name="acc")],
+        )
 
-    model.fit(
-        train_ds,
-        validation_data=val_ds,
-        epochs=args.fine_tune_epochs,
-        class_weight=class_weights,
-        callbacks=callbacks,
-    )
+        model.fit(
+            train_ds,
+            validation_data=val_ds,
+            epochs=args.fine_tune_epochs,
+            steps_per_epoch=train_steps,
+            class_weight=class_weights,
+            callbacks=callbacks,
+        )
+    else:
+        print("[info] fine_tune_epochs=0, skipping fine-tune stage")
 
     if len(test_df) > 0:
         test_loss, test_acc = model.evaluate(test_ds, verbose=0)
