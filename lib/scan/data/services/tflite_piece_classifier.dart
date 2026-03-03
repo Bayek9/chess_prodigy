@@ -29,6 +29,12 @@ class TflitePieceClassifier implements PieceClassifier {
 
   static const GridSquareMapper _squareMapper = GridSquareMapper();
 
+  static const int _emptyId = 0;
+  static const int _whitePawnId = 1;
+  static const int _whiteKingId = 6;
+  static const int _blackPawnId = 7;
+  static const int _blackKingId = 12;
+
   static const List<ScanPiece?> _classToPiece = <ScanPiece?>[
     null,
     ScanPiece(color: ScanPieceColor.white, type: ScanPieceType.pawn),
@@ -61,7 +67,7 @@ class TflitePieceClassifier implements PieceClassifier {
       return BoardScanPosition(pieces: const <String, ScanPiece>{});
     }
 
-    final pieces = <String, ScanPiece>{};
+    final predictions = <_SquarePrediction>[];
     for (int row = 0; row < 8; row++) {
       for (int col = 0; col < 8; col++) {
         final input = _squareToInputTensor(
@@ -80,22 +86,268 @@ class TflitePieceClassifier implements PieceClassifier {
         );
         interpreter.run(input, output);
 
-        final classId = _argmax(output.first);
-        if (classId <= 0 || classId >= _classToPiece.length) {
-          continue;
-        }
-
-        final piece = _classToPiece[classId];
-        if (piece == null) {
-          continue;
-        }
-
-        final square = _squareMapper.squareAt(row: row, col: col);
-        pieces[square] = piece;
+        final probs = List<double>.from(output.first, growable: false);
+        final topIds = _topClassIds(probs, count: 2);
+        final top1 = topIds.isEmpty ? _emptyId : topIds.first;
+        final top2 = topIds.length > 1 ? topIds[1] : top1;
+        predictions.add(
+          _SquarePrediction(
+            row: row,
+            col: col,
+            square: _squareMapper.squareAt(row: row, col: col),
+            probs: probs,
+            top1: top1,
+            top2: top2,
+          ),
+        );
       }
     }
 
+    final selected = predictions
+        .map((prediction) => prediction.top1)
+        .toList(growable: false);
+    final constraintsChanges = _applyChessConstraints(predictions, selected);
+
+    final pieces = <String, ScanPiece>{};
+    for (int i = 0; i < predictions.length; i++) {
+      final classId = selected[i];
+      if (classId == _emptyId) {
+        continue;
+      }
+      final piece = _classToPiece[classId];
+      if (piece == null) {
+        continue;
+      }
+      pieces[predictions[i].square] = piece;
+    }
+
+    if (!kReleaseMode && constraintsChanges > 0) {
+      debugPrint(
+        '[scan][piece_tflite] constraints_changes=$constraintsChanges',
+      );
+    }
+
     return BoardScanPosition(pieces: pieces);
+  }
+
+  int _applyChessConstraints(
+    List<_SquarePrediction> predictions,
+    List<int> selected,
+  ) {
+    var changes = 0;
+
+    changes += _enforceNoPawnsOnBackRanks(predictions, selected);
+
+    changes += _enforceExactlyOneKing(
+      predictions,
+      selected,
+      kingId: _whiteKingId,
+      otherKingId: _blackKingId,
+    );
+    changes += _enforceExactlyOneKing(
+      predictions,
+      selected,
+      kingId: _blackKingId,
+      otherKingId: _whiteKingId,
+    );
+
+    changes += _enforceMaxPawns(
+      predictions,
+      selected,
+      pawnId: _whitePawnId,
+      maxPawns: 8,
+    );
+    changes += _enforceMaxPawns(
+      predictions,
+      selected,
+      pawnId: _blackPawnId,
+      maxPawns: 8,
+    );
+
+    changes += _enforceNoPawnsOnBackRanks(predictions, selected);
+
+    return changes;
+  }
+
+  int _enforceNoPawnsOnBackRanks(
+    List<_SquarePrediction> predictions,
+    List<int> selected,
+  ) {
+    var changes = 0;
+    for (int idx = 0; idx < predictions.length; idx++) {
+      final prediction = predictions[idx];
+      final classId = selected[idx];
+      if (!_isPawnClass(classId)) {
+        continue;
+      }
+      if (prediction.row != 0 && prediction.row != 7) {
+        continue;
+      }
+
+      final replacement =
+          _bestClassFor(
+            prediction,
+            (candidate) => !_isPawnClass(candidate) && !_isKingClass(candidate),
+          ) ??
+          _bestClassFor(prediction, (candidate) => !_isPawnClass(candidate));
+
+      if (replacement != null && replacement != classId) {
+        selected[idx] = replacement;
+        changes += 1;
+      }
+    }
+    return changes;
+  }
+
+  int _enforceMaxPawns(
+    List<_SquarePrediction> predictions,
+    List<int> selected, {
+    required int pawnId,
+    required int maxPawns,
+  }) {
+    var changes = 0;
+    while (_countClass(selected, pawnId) > maxPawns) {
+      final pawnIndices = <int>[];
+      for (int i = 0; i < selected.length; i++) {
+        if (selected[i] == pawnId) {
+          pawnIndices.add(i);
+        }
+      }
+      if (pawnIndices.isEmpty) {
+        break;
+      }
+
+      pawnIndices.sort((a, b) {
+        final pa = predictions[a].probs[pawnId];
+        final pb = predictions[b].probs[pawnId];
+        final byConfidence = pa.compareTo(pb);
+        if (byConfidence != 0) {
+          return byConfidence;
+        }
+        return predictions[a].margin.compareTo(predictions[b].margin);
+      });
+
+      var changedOne = false;
+      for (final idx in pawnIndices) {
+        final replacement =
+            _bestClassFor(
+              predictions[idx],
+              (candidate) => candidate != pawnId && !_isKingClass(candidate),
+            ) ??
+            _bestClassFor(predictions[idx], (candidate) => candidate != pawnId);
+
+        if (replacement != null && replacement != selected[idx]) {
+          selected[idx] = replacement;
+          changes += 1;
+          changedOne = true;
+          break;
+        }
+      }
+
+      if (!changedOne) {
+        break;
+      }
+    }
+    return changes;
+  }
+
+  int _enforceExactlyOneKing(
+    List<_SquarePrediction> predictions,
+    List<int> selected, {
+    required int kingId,
+    required int otherKingId,
+  }) {
+    var changes = 0;
+    final kingIndices = <int>[];
+    for (int i = 0; i < selected.length; i++) {
+      if (selected[i] == kingId) {
+        kingIndices.add(i);
+      }
+    }
+
+    if (kingIndices.length > 1) {
+      kingIndices.sort(
+        (a, b) => predictions[a].probs[kingId].compareTo(
+          predictions[b].probs[kingId],
+        ),
+      );
+      for (int i = 0; i < kingIndices.length - 1; i++) {
+        final idx = kingIndices[i];
+        final replacement = _bestClassFor(
+          predictions[idx],
+          (candidate) => candidate != kingId && candidate != otherKingId,
+        );
+        if (replacement != null && replacement != selected[idx]) {
+          selected[idx] = replacement;
+          changes += 1;
+        }
+      }
+    }
+
+    if (_countClass(selected, kingId) == 0) {
+      int? bestIdx;
+      double bestScore = -double.infinity;
+      for (int i = 0; i < predictions.length; i++) {
+        if (selected[i] == otherKingId) {
+          continue;
+        }
+        final score = predictions[i].probs[kingId];
+        if (score > bestScore) {
+          bestScore = score;
+          bestIdx = i;
+        }
+      }
+      bestIdx ??= 0;
+      if (selected[bestIdx] != kingId) {
+        selected[bestIdx] = kingId;
+        changes += 1;
+      }
+    }
+
+    return changes;
+  }
+
+  int _countClass(List<int> selected, int classId) {
+    var count = 0;
+    for (final value in selected) {
+      if (value == classId) {
+        count += 1;
+      }
+    }
+    return count;
+  }
+
+  bool _isPawnClass(int classId) {
+    return classId == _whitePawnId || classId == _blackPawnId;
+  }
+
+  bool _isKingClass(int classId) {
+    return classId == _whiteKingId || classId == _blackKingId;
+  }
+
+  int? _bestClassFor(
+    _SquarePrediction prediction,
+    bool Function(int classId) predicate,
+  ) {
+    int? bestId;
+    double bestScore = -double.infinity;
+    for (int classId = 0; classId < prediction.probs.length; classId++) {
+      if (!predicate(classId)) {
+        continue;
+      }
+      final score = prediction.probs[classId];
+      if (score > bestScore) {
+        bestScore = score;
+        bestId = classId;
+      }
+    }
+    return bestId;
+  }
+
+  List<int> _topClassIds(List<double> probs, {required int count}) {
+    final ids = List<int>.generate(probs.length, (index) => index);
+    ids.sort((a, b) => probs[b].compareTo(probs[a]));
+    return ids.take(count).toList(growable: false);
   }
 
   Future<void> _ensureLoaded() async {
@@ -222,22 +474,6 @@ class TflitePieceClassifier implements PieceClassifier {
 
     return <int>[sample(0), sample(1), sample(2)];
   }
-
-  int _argmax(List<double> values) {
-    if (values.isEmpty) {
-      return 0;
-    }
-    int best = 0;
-    double bestValue = values[0];
-    for (int i = 1; i < values.length; i++) {
-      final v = values[i];
-      if (v > bestValue) {
-        best = i;
-        bestValue = v;
-      }
-    }
-    return best;
-  }
 }
 
 class _DecodedRgbaImage {
@@ -250,4 +486,24 @@ class _DecodedRgbaImage {
   final int width;
   final int height;
   final Uint8List rgba;
+}
+
+class _SquarePrediction {
+  const _SquarePrediction({
+    required this.row,
+    required this.col,
+    required this.square,
+    required this.probs,
+    required this.top1,
+    required this.top2,
+  });
+
+  final int row;
+  final int col;
+  final String square;
+  final List<double> probs;
+  final int top1;
+  final int top2;
+
+  double get margin => probs[top1] - probs[top2];
 }
