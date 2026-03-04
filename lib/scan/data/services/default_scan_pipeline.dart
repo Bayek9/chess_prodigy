@@ -22,13 +22,16 @@ class DefaultScanPipelineFactory {
       'assets/scan_models/board_binary.tflite';
   static const String _defaultPieceClassifierModelAssetPath =
       'assets/scan_models/piece_13cls_fp16.tflite';
+  static const int _defaultRectifierTargetSize = int.fromEnvironment(
+    'SCAN_RECTIFY_SIZE',
+    defaultValue: 1024,
+  );
 
   static final Map<String, TfliteBoardPresenceClassifier>
   _boardPresenceClassifiersByAsset = <String, TfliteBoardPresenceClassifier>{};
 
-  static final BoardRectifier _boardRectifier = const PerspectiveBoardRectifier(
-    targetSize: 1024,
-  );
+  static final Map<int, PerspectiveBoardRectifier> _boardRectifiersBySize =
+      <int, PerspectiveBoardRectifier>{};
 
   static final Map<String, TflitePieceClassifier> _pieceClassifiersByAsset =
       <String, TflitePieceClassifier>{};
@@ -51,6 +54,14 @@ class DefaultScanPipelineFactory {
     );
   }
 
+  static BoardRectifier boardRectifierForSize({required int targetSize}) {
+    final clampedTargetSize = targetSize.clamp(256, 2048);
+    return _boardRectifiersBySize.putIfAbsent(
+      clampedTargetSize,
+      () => PerspectiveBoardRectifier(targetSize: clampedTargetSize),
+    );
+  }
+
   static ScanPositionUseCase create({
     PositionValidator? validator,
     FenBuilder? fenBuilder,
@@ -67,6 +78,7 @@ class DefaultScanPipelineFactory {
     double openCvMinBoardConfidenceLineFallback = 0.24,
     double minPostWarpGridness = 0.0,
     bool openCvRescueMode = false,
+    int rectifierTargetSize = _defaultRectifierTargetSize,
   }) {
     final fallbackDetector = const StatisticalBoardDetector();
     final boardPresenceClassifier = useBoardPresenceGate
@@ -93,7 +105,7 @@ class DefaultScanPipelineFactory {
               rescueMode: openCvRescueMode,
             )
           : fallbackDetector,
-      rectifier: _boardRectifier,
+      rectifier: boardRectifierForSize(targetSize: rectifierTargetSize),
       classifier: pieceClassifier,
       validator: validator ?? const BasicPositionValidator(),
       fenBuilder: fenBuilder ?? const BasicFenBuilder(),

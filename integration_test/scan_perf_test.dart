@@ -24,6 +24,10 @@ void main() {
       'PERF_PIECE_USE_NNAPI',
       defaultValue: false,
     );
+    const rectifySize = int.fromEnvironment(
+      'PERF_RECTIFY_SIZE',
+      defaultValue: 1024,
+    );
 
     final cases = await _loadBoardCases(maxBoards: 8);
     if (cases.isEmpty) {
@@ -38,7 +42,7 @@ void main() {
       minBoardConfidence: 0.30,
       minBoardConfidenceLineFallback: 0.34,
     );
-    final rectifier = const PerspectiveBoardRectifier(targetSize: 1024);
+    final rectifier = PerspectiveBoardRectifier(targetSize: rectifySize);
     final classifier = TflitePieceClassifier(
       modelAssetPath: 'assets/scan_models/piece_13cls_fp16.tflite',
       threads: pieceThreads,
@@ -148,6 +152,7 @@ void main() {
       'piece_threads': pieceThreads,
       'piece_nnapi': pieceUseNnApi,
       'piece_modes': classifyModes,
+      'rectify_size': rectifySize,
       'median_t_detect_ms': _medianInt(detectMs),
       'median_t_rectify_ms': _medianInt(rectifyMs),
       'median_t_classify_ms': _medianInt(classifyMs),
