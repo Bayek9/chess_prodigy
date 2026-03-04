@@ -108,7 +108,7 @@ def _load_board_stats(csv_path: Path) -> Dict[int, BoardStats]:
 def _should_retry(primary: BoardStats, min_avg_margin: float, min_pieces: int, max_pieces: int) -> bool:
     plausible = min_pieces <= primary.pieces <= max_pieces
     low_conf = primary.avg_margin < min_avg_margin
-    return primary.errors > 0 or (not plausible) or low_conf
+    return (not plausible) or low_conf
 
 
 def _should_switch(primary: BoardStats, alternate: BoardStats, min_pieces: int, max_pieces: int) -> bool:
@@ -329,3 +329,4 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+

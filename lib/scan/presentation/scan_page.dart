@@ -220,9 +220,9 @@ class _ScanPageState extends State<ScanPage> {
   static const double _gridnessRescueMinBoardQuality = 0.30;
   static const double _gridnessRescueMinBoardConfidence = 0.35;
   static const double _gridnessRescueMinBoardAreaRatio = 0.12;
-  static const double _pieceFallbackMinAvgMargin = 0.08;
-  static const int _pieceFallbackMinPieces = 16;
-  static const int _pieceFallbackMaxPieces = 40;
+  static const double _pieceFallbackMinAvgMargin = 0.04;
+  static const int _pieceFallbackMinPieces = 14;
+  static const int _pieceFallbackMaxPieces = 44;
   static const Set<String> _retryableRejectReasons = <String>{
     'no_line_low_checker_combined',
     'line_low_combined',
