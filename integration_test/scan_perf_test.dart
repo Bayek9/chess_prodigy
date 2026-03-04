@@ -16,18 +16,33 @@ void main() {
   IntegrationTestWidgetsFlutterBinding.ensureInitialized();
 
   testWidgets('scan perf stage timings', (tester) async {
+    const pieceThreads = int.fromEnvironment(
+      'PERF_PIECE_THREADS',
+      defaultValue: 4,
+    );
+    const pieceUseNnApi = bool.fromEnvironment(
+      'PERF_PIECE_USE_NNAPI',
+      defaultValue: false,
+    );
+
     final cases = await _loadBoardCases(maxBoards: 8);
     if (cases.isEmpty) {
       fail('No board cases found in assets/regression/cases.json');
     }
 
     final detector = OpenCvHybridBoardDetector(
+      enableCornerRefinement: false,
+      checkerTargetSize: 128,
+      maxOpenCvVariants: 3,
+      useLightPreprocessSet: true,
       minBoardConfidence: 0.30,
       minBoardConfidenceLineFallback: 0.34,
     );
     final rectifier = const PerspectiveBoardRectifier(targetSize: 1024);
     final classifier = TflitePieceClassifier(
       modelAssetPath: 'assets/scan_models/piece_13cls_fp16.tflite',
+      threads: pieceThreads,
+      useNnApiForAndroid: pieceUseNnApi,
     );
     final validator = const BasicPositionValidator();
     final fenBuilder = const BasicFenBuilder();
@@ -35,8 +50,12 @@ void main() {
     final detectMs = <int>[];
     final rectifyMs = <int>[];
     final classifyMs = <int>[];
+    final classifyPreMs = <int>[];
+    final classifyInvokeMs = <int>[];
+    final classifyDecodeMs = <int>[];
     final postMs = <int>[];
     final totalMs = <int>[];
+    final classifyModes = <String, int>{};
 
     for (final c in cases) {
       final bytes = await _loadAssetBytes(c.assetPath);
@@ -77,6 +96,18 @@ void main() {
       classifyWatch.stop();
       classifyMs.add(classifyWatch.elapsedMilliseconds);
 
+      final classifyPerf = classifier.lastPerfStats;
+      if (classifyPerf != null) {
+        classifyPreMs.add(classifyPerf.preprocessMs);
+        classifyInvokeMs.add(classifyPerf.invokeMs);
+        classifyDecodeMs.add(classifyPerf.decodeMs);
+        classifyModes.update(
+          classifyPerf.mode,
+          (value) => value + 1,
+          ifAbsent: () => 1,
+        );
+      }
+
       final postWatch = Stopwatch()..start();
       final validation = validator.validate(position);
       final fen = fenBuilder.build(position);
@@ -86,6 +117,14 @@ void main() {
       totalWatch.stop();
       totalMs.add(totalWatch.elapsedMilliseconds);
 
+      final perfPart = classifyPerf == null
+          ? 'piece_perf=na'
+          : 'piece_mode=${classifyPerf.mode} '
+                'piece_pre_ms=${classifyPerf.preprocessMs} '
+                'piece_invoke_ms=${classifyPerf.invokeMs} '
+                'piece_decode_ms=${classifyPerf.decodeMs} '
+                'piece_total_ms=${classifyPerf.totalMs}';
+
       debugPrint(
         '[scan_perf][entry] id=${c.id} detected=true valid=${validation.isValid} '
         'pieces=${position.pieces.length} '
@@ -94,6 +133,7 @@ void main() {
         't_classify_ms=${classifyWatch.elapsedMilliseconds} '
         't_post_ms=${postWatch.elapsedMilliseconds} '
         't_total_ms=${totalWatch.elapsedMilliseconds} '
+        '$perfPart '
         'fen_head=${fen.split(' ').first}',
       );
     }
@@ -104,9 +144,15 @@ void main() {
       'runs_rectify': rectifyMs.length,
       'runs_classify': classifyMs.length,
       'runs_post': postMs.length,
+      'piece_threads': pieceThreads,
+      'piece_nnapi': pieceUseNnApi,
+      'piece_modes': classifyModes,
       'median_t_detect_ms': _medianInt(detectMs),
       'median_t_rectify_ms': _medianInt(rectifyMs),
       'median_t_classify_ms': _medianInt(classifyMs),
+      'median_t_classify_pre_ms': _medianInt(classifyPreMs),
+      'median_t_classify_invoke_ms': _medianInt(classifyInvokeMs),
+      'median_t_classify_decode_ms': _medianInt(classifyDecodeMs),
       'median_t_post_ms': _medianInt(postMs),
       'median_t_total_ms': _medianInt(totalMs),
       'mean_t_total_ms': _mean(totalMs),
