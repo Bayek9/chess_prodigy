@@ -1022,8 +1022,7 @@ class _ScanPageState extends State<ScanPage> {
         primaryStats != null &&
         primaryStats.avgMargin < _pieceFallbackMinAvgMargin;
 
-    final shouldRetry =
-        primaryErrors > 0 || !primaryPlausible || primaryLowConfidence;
+    final shouldRetry = !primaryPlausible || primaryLowConfidence;
     if (!shouldRetry) {
       return _PieceModelFallbackResolution(
         result: result,
