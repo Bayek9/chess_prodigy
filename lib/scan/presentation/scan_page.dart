@@ -12,6 +12,7 @@ import '../data/services/asset_scan_validation_dataset_loader.dart';
 import '../data/services/basic_fen_builder.dart';
 import '../data/services/basic_position_validator.dart';
 import '../data/services/default_scan_pipeline.dart';
+import '../data/services/tflite_piece_classifier.dart';
 import '../domain/entities/board_geometry.dart';
 import '../domain/entities/board_scan_position.dart';
 import '../domain/entities/scan_image.dart';
@@ -20,12 +21,27 @@ import '../domain/services/fen_builder.dart';
 import '../domain/services/grid_square_mapper.dart';
 import '../domain/services/position_validator.dart';
 import '../domain/services/board_presence_classifier.dart';
+import '../domain/services/piece_classifier.dart';
 import '../domain/usecases/run_scan_dataset_validation_use_case.dart';
 import '../domain/usecases/scan_position_use_case.dart';
 import 'widgets/board_correction_editor.dart';
 import 'widgets/piece_chooser_sheet.dart';
 
 enum _ScanCaptureDomain { photoReal, photoPrint, screen }
+
+class _PieceModelFallbackResolution {
+  const _PieceModelFallbackResolution({
+    required this.result,
+    required this.domain,
+    required this.applied,
+    required this.debugLabel,
+  });
+
+  final ScanPipelineResult result;
+  final _ScanCaptureDomain domain;
+  final bool applied;
+  final String debugLabel;
+}
 
 class _RoutingResolution {
   const _RoutingResolution({
@@ -204,6 +220,9 @@ class _ScanPageState extends State<ScanPage> {
   static const double _gridnessRescueMinBoardQuality = 0.30;
   static const double _gridnessRescueMinBoardConfidence = 0.35;
   static const double _gridnessRescueMinBoardAreaRatio = 0.12;
+  static const double _pieceFallbackMinAvgMargin = 0.08;
+  static const int _pieceFallbackMinPieces = 16;
+  static const int _pieceFallbackMaxPieces = 40;
   static const Set<String> _retryableRejectReasons = <String>{
     'no_line_low_checker_combined',
     'line_low_combined',
@@ -228,6 +247,10 @@ class _ScanPageState extends State<ScanPage> {
       'assets/scan_models/board_binary_photo.tflite';
   static const String _screenBoardModelAssetPath =
       'assets/scan_models/board_binary_screen.tflite';
+  static const String _screenPieceModelAssetPath =
+      'assets/scan_models/piece_13cls_screen_ft1b.tflite';
+  static const String _photoPieceModelAssetPath =
+      'assets/scan_models/piece_13cls_photo_real_fen_pseudo5.tflite';
   static const String _fieldProtocolPrefsKey = 'scan.field_protocol.entries';
   static const String _fieldProtocolDomainPrefsKey =
       'scan.field_protocol.expected_domain';
@@ -251,6 +274,8 @@ class _ScanPageState extends State<ScanPage> {
   late final RunScanDatasetValidationUseCase _datasetValidationUseCaseFast;
   late final BoardPresenceClassifier _photoGateClassifier;
   late final BoardPresenceClassifier _screenGateClassifier;
+  late final PieceClassifier _screenPieceClassifier;
+  late final PieceClassifier _photoPieceClassifier;
 
   ScanInputImage? _selectedImage;
   ScanPipelineResult? _scanResult;
@@ -307,6 +332,12 @@ class _ScanPageState extends State<ScanPage> {
         DefaultScanPipelineFactory.boardPresenceClassifierForAsset(
           modelAssetPath: _screenBoardModelAssetPath,
         );
+    _screenPieceClassifier = DefaultScanPipelineFactory.pieceClassifierForAsset(
+      modelAssetPath: _screenPieceModelAssetPath,
+    );
+    _photoPieceClassifier = DefaultScanPipelineFactory.pieceClassifierForAsset(
+      modelAssetPath: _photoPieceModelAssetPath,
+    );
     _scanUseCasePhotoReal = DefaultScanPipelineFactory.create(
       validator: _validator,
       fenBuilder: _fenBuilder,
@@ -314,15 +345,18 @@ class _ScanPageState extends State<ScanPage> {
       boardPresenceThreshold: _photoRealAcceptThreshold,
       boardPresenceRejectThreshold: _photoRealRejectThreshold,
       boardPresenceModelAssetPath: _photoBoardModelAssetPath,
+      pieceClassifierModelAssetPath: _photoPieceModelAssetPath,
       useFallbackForReject: true,
     );
     _scanUseCaseScreen = DefaultScanPipelineFactory.create(
       validator: _validator,
+      lowLatencyDetector: true,
       fenBuilder: _fenBuilder,
       useBoardPresenceGate: true,
       boardPresenceThreshold: _screenAcceptThreshold,
       boardPresenceRejectThreshold: _screenRejectThreshold,
       boardPresenceModelAssetPath: _screenBoardModelAssetPath,
+      pieceClassifierModelAssetPath: _screenPieceModelAssetPath,
       useFallbackForReject: false,
       openCvMinBoardConfidence: _screenOpenCvMinBoardConfidence,
       openCvMinBoardConfidenceLineFallback:
@@ -331,11 +365,13 @@ class _ScanPageState extends State<ScanPage> {
     );
     _scanUseCaseScreenStrongAcceptRescue = DefaultScanPipelineFactory.create(
       validator: _validator,
+      lowLatencyDetector: true,
       fenBuilder: _fenBuilder,
       useBoardPresenceGate: true,
       boardPresenceThreshold: _screenAcceptThreshold,
       boardPresenceRejectThreshold: _screenRejectThreshold,
       boardPresenceModelAssetPath: _screenBoardModelAssetPath,
+      pieceClassifierModelAssetPath: _screenPieceModelAssetPath,
       useFallbackForReject: false,
       openCvMinBoardConfidence:
           _screenStrongAcceptRescueOpenCvMinBoardConfidence,
@@ -346,11 +382,13 @@ class _ScanPageState extends State<ScanPage> {
     );
     _scanUseCaseScreenLoose = DefaultScanPipelineFactory.create(
       validator: _validator,
+      lowLatencyDetector: true,
       fenBuilder: _fenBuilder,
       useBoardPresenceGate: true,
       boardPresenceThreshold: _screenAcceptThreshold,
       boardPresenceRejectThreshold: _screenRejectThreshold,
       boardPresenceModelAssetPath: _screenBoardModelAssetPath,
+      pieceClassifierModelAssetPath: _screenPieceModelAssetPath,
       useFallbackForReject: false,
       openCvMinBoardConfidence: _screenLooseOpenCvMinBoardConfidence,
       openCvMinBoardConfidenceLineFallback:
@@ -359,11 +397,13 @@ class _ScanPageState extends State<ScanPage> {
     );
     _scanUseCaseScreenGridnessRescue = DefaultScanPipelineFactory.create(
       validator: _validator,
+      lowLatencyDetector: true,
       fenBuilder: _fenBuilder,
       useBoardPresenceGate: true,
       boardPresenceThreshold: _screenAcceptThreshold,
       boardPresenceRejectThreshold: _screenRejectThreshold,
       boardPresenceModelAssetPath: _screenBoardModelAssetPath,
+      pieceClassifierModelAssetPath: _screenPieceModelAssetPath,
       useFallbackForReject: false,
       openCvMinBoardConfidence: _screenOpenCvMinBoardConfidence,
       openCvMinBoardConfidenceLineFallback:
@@ -374,11 +414,14 @@ class _ScanPageState extends State<ScanPage> {
       validator: _validator,
       fenBuilder: _fenBuilder,
       useBoardPresenceGate: false,
+      pieceClassifierModelAssetPath: _photoPieceModelAssetPath,
     );
     _scanUseCaseScreenNoGate = DefaultScanPipelineFactory.create(
       validator: _validator,
+      lowLatencyDetector: true,
       fenBuilder: _fenBuilder,
       useBoardPresenceGate: false,
+      pieceClassifierModelAssetPath: _screenPieceModelAssetPath,
       openCvMinBoardConfidence: _screenOpenCvMinBoardConfidence,
       openCvMinBoardConfidenceLineFallback:
           _screenOpenCvMinBoardConfidenceLineFallback,
@@ -389,12 +432,14 @@ class _ScanPageState extends State<ScanPage> {
       fenBuilder: _fenBuilder,
       lowLatencyDetector: false,
       useBoardPresenceGate: true,
+      pieceClassifierModelAssetPath: _screenPieceModelAssetPath,
     );
     _datasetScanUseCaseFast = DefaultScanPipelineFactory.create(
       validator: _validator,
       fenBuilder: _fenBuilder,
       lowLatencyDetector: true,
       useBoardPresenceGate: true,
+      pieceClassifierModelAssetPath: _screenPieceModelAssetPath,
     );
     _datasetValidationUseCase = RunScanDatasetValidationUseCase(
       scanPipeline: _datasetScanUseCase,
@@ -663,6 +708,16 @@ class _ScanPageState extends State<ScanPage> {
             'retry_count=$retries/$maxRetries';
       }
 
+      final pieceFallback = await _maybeFallbackPieceModel(
+        result: result,
+        domain: resolvedDomain,
+      );
+      result = pieceFallback.result;
+      resolvedDomain = pieceFallback.domain;
+      if (pieceFallback.debugLabel.isNotEmpty) {
+        routingDebug = '$routingDebug ${pieceFallback.debugLabel}';
+      }
+
       var reportedGateDecisionRaw = _gateDecisionRawFromDetectorDebug(
         result.detectorDebug,
       );
@@ -919,6 +974,130 @@ class _ScanPageState extends State<ScanPage> {
         return bypassGate ? _scanUseCasePhotoRealNoGate : _scanUseCasePhotoReal;
       case _ScanCaptureDomain.screen:
         return bypassGate ? _scanUseCaseScreenNoGate : _scanUseCaseScreen;
+    }
+  }
+
+  PieceClassifier _pieceClassifierForDomain(_ScanCaptureDomain domain) {
+    switch (domain) {
+      case _ScanCaptureDomain.photoReal:
+      case _ScanCaptureDomain.photoPrint:
+        return _photoPieceClassifier;
+      case _ScanCaptureDomain.screen:
+        return _screenPieceClassifier;
+    }
+  }
+
+  PieceClassifierDecisionStats? _pieceDecisionStatsForDomain(
+    _ScanCaptureDomain domain,
+  ) {
+    final classifier = _pieceClassifierForDomain(domain);
+    if (classifier is TflitePieceClassifier) {
+      return classifier.lastDecisionStats;
+    }
+    return null;
+  }
+
+  bool _isPlausiblePieceCount(int count) {
+    return count >= _pieceFallbackMinPieces && count <= _pieceFallbackMaxPieces;
+  }
+
+  Future<_PieceModelFallbackResolution> _maybeFallbackPieceModel({
+    required ScanPipelineResult result,
+    required _ScanCaptureDomain domain,
+  }) async {
+    if (!result.boardDetected || !result.warpOk) {
+      return _PieceModelFallbackResolution(
+        result: result,
+        domain: domain,
+        applied: false,
+        debugLabel: '',
+      );
+    }
+
+    final primaryStats = _pieceDecisionStatsForDomain(domain);
+    final primaryErrors = result.validation.errors.length;
+    final primaryPieces = result.detectedPosition.pieces.length;
+    final primaryPlausible = _isPlausiblePieceCount(primaryPieces);
+    final primaryLowConfidence =
+        primaryStats != null &&
+        primaryStats.avgMargin < _pieceFallbackMinAvgMargin;
+
+    final shouldRetry =
+        primaryErrors > 0 || !primaryPlausible || primaryLowConfidence;
+    if (!shouldRetry) {
+      return _PieceModelFallbackResolution(
+        result: result,
+        domain: domain,
+        applied: false,
+        debugLabel: '',
+      );
+    }
+
+    final alternateDomain = domain == _ScanCaptureDomain.screen
+        ? _ScanCaptureDomain.photoReal
+        : _ScanCaptureDomain.screen;
+
+    try {
+      final alternateClassifier = _pieceClassifierForDomain(alternateDomain);
+      final alternatePosition = await alternateClassifier.classify(
+        result.rectifiedBoard,
+      );
+      final alternateValidation = _validator.validate(alternatePosition);
+      final alternateFen = _fenBuilder.build(alternatePosition);
+      final alternateErrors = alternateValidation.errors.length;
+      final alternatePieces = alternatePosition.pieces.length;
+      final alternatePlausible = _isPlausiblePieceCount(alternatePieces);
+      final alternateStats = _pieceDecisionStatsForDomain(alternateDomain);
+
+      var switchToAlternate = false;
+      if (alternateErrors < primaryErrors) {
+        switchToAlternate = true;
+      } else if (alternateErrors == primaryErrors) {
+        if (alternatePlausible && !primaryPlausible) {
+          switchToAlternate = true;
+        } else if (alternatePlausible == primaryPlausible) {
+          final primaryMargin = primaryStats?.avgMargin ?? -1.0;
+          final alternateMargin = alternateStats?.avgMargin ?? -1.0;
+          if (alternateMargin > primaryMargin + 1e-6) {
+            switchToAlternate = true;
+          }
+        }
+      }
+
+      if (!switchToAlternate) {
+        return _PieceModelFallbackResolution(
+          result: result,
+          domain: domain,
+          applied: false,
+          debugLabel:
+              ' piece_fallback=tried switched=false from=${_captureDomainLabel(domain)} to=${_captureDomainLabel(alternateDomain)}',
+        );
+      }
+
+      final switchedResult = ScanPipelineResult(
+        geometry: result.geometry,
+        rectifiedBoard: result.rectifiedBoard,
+        detectedPosition: alternatePosition,
+        validation: alternateValidation,
+        detectedFen: alternateFen,
+        detectorDebug:
+            '${result.detectorDebug} piece_model_fallback=switched from=${_captureDomainLabel(domain)} to=${_captureDomainLabel(alternateDomain)} primary_errors=$primaryErrors alt_errors=$alternateErrors',
+      );
+      return _PieceModelFallbackResolution(
+        result: switchedResult,
+        domain: alternateDomain,
+        applied: true,
+        debugLabel:
+            ' piece_fallback=switched from=${_captureDomainLabel(domain)} to=${_captureDomainLabel(alternateDomain)} primary_errors=$primaryErrors alt_errors=$alternateErrors',
+      );
+    } catch (e) {
+      return _PieceModelFallbackResolution(
+        result: result,
+        domain: domain,
+        applied: false,
+        debugLabel:
+            ' piece_fallback=error from=${_captureDomainLabel(domain)} error=$e',
+      );
     }
   }
 

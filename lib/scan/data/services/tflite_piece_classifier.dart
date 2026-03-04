@@ -53,6 +53,7 @@ class TflitePieceClassifier implements PieceClassifier {
   Uint8List? _singleInputBytes;
 
   PieceClassifierPerfStats? _lastPerfStats;
+  PieceClassifierDecisionStats? _lastDecisionStats;
 
   static const GridSquareMapper _squareMapper = GridSquareMapper();
   static const int _squareCount = 64;
@@ -94,6 +95,7 @@ class TflitePieceClassifier implements PieceClassifier {
   );
 
   PieceClassifierPerfStats? get lastPerfStats => _lastPerfStats;
+  PieceClassifierDecisionStats? get lastDecisionStats => _lastDecisionStats;
 
   @override
   Future<BoardScanPosition> classify(RectifiedBoardImage rectifiedBoard) async {
@@ -148,6 +150,24 @@ class TflitePieceClassifier implements PieceClassifier {
       fallbackUsed: run.fallbackUsed,
     );
     _lastPerfStats = stats;
+
+    final predictionCount = run.predictions.length;
+    final totalMargin = run.predictions.fold<double>(
+      0.0,
+      (sum, prediction) => sum + prediction.margin,
+    );
+    var lowMarginSquares = 0;
+    for (final prediction in run.predictions) {
+      if (prediction.margin < 0.10) {
+        lowMarginSquares += 1;
+      }
+    }
+    _lastDecisionStats = PieceClassifierDecisionStats(
+      avgMargin: predictionCount == 0 ? 0.0 : totalMargin / predictionCount,
+      lowMarginSquares: lowMarginSquares,
+      constraintsChanges: constraintsChanges,
+      predictedPieces: pieces.length,
+    );
 
     if (!kReleaseMode && logPerfInNonRelease) {
       final constraintsPart = constraintsChanges > 0
@@ -1016,6 +1036,21 @@ class _RuntimeConfig {
 
   final int threads;
   final bool useNnApi;
+}
+
+@immutable
+class PieceClassifierDecisionStats {
+  const PieceClassifierDecisionStats({
+    required this.avgMargin,
+    required this.lowMarginSquares,
+    required this.constraintsChanges,
+    required this.predictedPieces,
+  });
+
+  final double avgMargin;
+  final int lowMarginSquares;
+  final int constraintsChanges;
+  final int predictedPieces;
 }
 
 @immutable

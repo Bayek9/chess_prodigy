@@ -21,7 +21,7 @@ class DefaultScanPipelineFactory {
   static const String _defaultBoardPresenceModelAssetPath =
       'assets/scan_models/board_binary.tflite';
   static const String _defaultPieceClassifierModelAssetPath =
-      'assets/scan_models/piece_13cls_fp16.tflite';
+      'assets/scan_models/piece_13cls_screen_ft1b.tflite';
   static const int _defaultRectifierTargetSize = int.fromEnvironment(
     'SCAN_RECTIFY_SIZE',
     defaultValue: 1024,

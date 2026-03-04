@@ -53,6 +53,12 @@ packages/opencv_4/example/
 /data/
 /models/
 
+# Eval suite outputs (kept explicit for release hygiene)
+models/eval_suite_*
+models/eval_suite_byfen/*.csv
+models/eval_suite_byfen/fallback_threshold_*.json
+
+
 # Keep scan photos local only (not pushed to GitHub)
 assets/scan_samples/images/*
 !assets/scan_samples/images/.gitkeep
@@ -66,3 +72,4 @@ tools/pieces/gt_*_folds_*/
 models/kfold_gtv1_*/
 models/*/eval_gt_v1_k4_fold*/
 models/*/eval_*_gt_v1*/
+
