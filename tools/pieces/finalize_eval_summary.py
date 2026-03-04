@@ -11,6 +11,7 @@ PHOTO_MODELS = {
     'real_fen_all_plus_pseudo5_v1_from_real_fen_all_e1': 'models/eval_suite_byfen/real_fen_all_plus_pseudo5_v1_from_real_fen_all_e1',
 }
 SCREEN_MODELS = {
+    'ft1bis_screen': 'models/eval_suite_screen_gtv1/ft1bis/position_core_cases.csv',
     'ft1b_screen': 'models/eval_suite_screen_gtv1/ft1b/position_core_cases.csv',
     'realv1_from_ft1b_e4ft1': 'models/eval_suite_screen_gtv1/realv1/position_core_cases.csv',
     'ftsafe_v2': 'models/eval_suite_screen_gtv1/ftsafe/position_core_cases.csv',

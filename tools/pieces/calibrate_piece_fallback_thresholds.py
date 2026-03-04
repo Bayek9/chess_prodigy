@@ -24,7 +24,7 @@ DEFAULT_DATASETS = [
     {
         "name": "screen_gt_v1",
         "domain": "screen",
-        "screen_csv": "models/eval_suite_screen_gtv1/ft1b/position_core_cases.csv",
+        "screen_csv": "models/eval_suite_screen_gtv1/ft1bis/position_core_cases.csv",
         "photo_csv": "models/eval_suite_screen_gtv1/real_fen_all_plus_pseudo5_v1_from_real_fen_all_e1/position_core_cases.csv",
     },
 ]

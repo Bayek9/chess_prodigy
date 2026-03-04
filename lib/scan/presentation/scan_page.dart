@@ -223,6 +223,7 @@ class _ScanPageState extends State<ScanPage> {
   static const double _pieceFallbackMinAvgMargin = 0.04;
   static const int _pieceFallbackMinPieces = 14;
   static const int _pieceFallbackMaxPieces = 44;
+  static const bool _enablePieceModelFallback = false;
   static const Set<String> _retryableRejectReasons = <String>{
     'no_line_low_checker_combined',
     'line_low_combined',
@@ -248,7 +249,7 @@ class _ScanPageState extends State<ScanPage> {
   static const String _screenBoardModelAssetPath =
       'assets/scan_models/board_binary_screen.tflite';
   static const String _screenPieceModelAssetPath =
-      'assets/scan_models/piece_13cls_screen_ft1b.tflite';
+      'assets/scan_models/piece_13cls_screen_ft1bis.tflite';
   static const String _photoPieceModelAssetPath =
       'assets/scan_models/piece_13cls_photo_real_fen_pseudo5.tflite';
   static const String _fieldProtocolPrefsKey = 'scan.field_protocol.entries';
@@ -1005,6 +1006,15 @@ class _ScanPageState extends State<ScanPage> {
     required ScanPipelineResult result,
     required _ScanCaptureDomain domain,
   }) async {
+    if (!_enablePieceModelFallback) {
+      return _PieceModelFallbackResolution(
+        result: result,
+        domain: domain,
+        applied: false,
+        debugLabel: '',
+      );
+    }
+
     if (!result.boardDetected || !result.warpOk) {
       return _PieceModelFallbackResolution(
         result: result,
