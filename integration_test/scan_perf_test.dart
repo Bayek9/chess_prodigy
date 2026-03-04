@@ -43,6 +43,7 @@ void main() {
       modelAssetPath: 'assets/scan_models/piece_13cls_fp16.tflite',
       threads: pieceThreads,
       useNnApiForAndroid: pieceUseNnApi,
+      enableAutoTune: false,
     );
     final validator = const BasicPositionValidator();
     final fenBuilder = const BasicFenBuilder();

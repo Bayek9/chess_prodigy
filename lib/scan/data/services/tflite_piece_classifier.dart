@@ -2,6 +2,7 @@ import 'dart:math' as math;
 import 'dart:ui' as ui;
 
 import 'package:flutter/foundation.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:tflite_flutter/tflite_flutter.dart';
 
 import '../../domain/entities/board_scan_position.dart';
@@ -18,6 +19,8 @@ class TflitePieceClassifier implements PieceClassifier {
     this.cropInsetFraction = 0.08,
     this.useNnApiForAndroid = false,
     this.logPerfInNonRelease = true,
+    this.enableAutoTune = true,
+    this.autoTuneBenchmarkInvokes = 3,
   });
 
   final String modelAssetPath;
@@ -26,6 +29,8 @@ class TflitePieceClassifier implements PieceClassifier {
   final double cropInsetFraction;
   final bool useNnApiForAndroid;
   final bool logPerfInNonRelease;
+  final bool enableAutoTune;
+  final int autoTuneBenchmarkInvokes;
 
   Interpreter? _interpreter;
   Tensor? _inputTensor;
@@ -33,6 +38,9 @@ class TflitePieceClassifier implements PieceClassifier {
 
   bool _loadAttempted = false;
   String? _loadError;
+
+  int _resolvedThreads = 4;
+  bool _resolvedUseNnApi = false;
 
   bool _batchInferenceEnabled = false;
   String _inferenceMode = 'uninitialized';
@@ -49,6 +57,13 @@ class TflitePieceClassifier implements PieceClassifier {
   static const GridSquareMapper _squareMapper = GridSquareMapper();
   static const int _squareCount = 64;
   static const int _channels = 3;
+
+  static const String _autoTunePrefsVersion = 'r1';
+  static const List<_RuntimeConfig> _autoTuneCandidates = <_RuntimeConfig>[
+    _RuntimeConfig(threads: 4, useNnApi: false),
+    _RuntimeConfig(threads: 2, useNnApi: false),
+    _RuntimeConfig(threads: 4, useNnApi: true),
+  ];
 
   static const int _emptyId = 0;
   static const int _whitePawnId = 1;
@@ -700,15 +715,11 @@ class TflitePieceClassifier implements PieceClassifier {
     }
     _loadAttempted = true;
     try {
-      final options = InterpreterOptions()..threads = threads;
-      if (useNnApiForAndroid) {
-        options.useNnApiForAndroid = true;
-      }
+      final runtimeConfig = await _resolveRuntimeConfig();
+      _resolvedThreads = runtimeConfig.threads;
+      _resolvedUseNnApi = runtimeConfig.useNnApi;
 
-      final interpreter = await Interpreter.fromAsset(
-        modelAssetPath,
-        options: options,
-      );
+      final interpreter = await _createInterpreter(runtimeConfig);
       _interpreter = interpreter;
       _configureInferenceLayouts(interpreter);
 
@@ -716,14 +727,178 @@ class TflitePieceClassifier implements PieceClassifier {
         debugPrint(
           '[scan][piece_tflite] loaded '
           'mode=$_inferenceMode '
-          'threads=$threads '
-          'nnapi=$useNnApiForAndroid',
+          'threads=$_resolvedThreads '
+          'nnapi=$_resolvedUseNnApi '
+          'autotune=$enableAutoTune',
         );
       }
     } catch (e) {
       _loadError = e.toString();
       _interpreter = null;
+      _clearTensorCaches();
     }
+  }
+
+  bool get _supportsAutoTune =>
+      !kIsWeb && defaultTargetPlatform == TargetPlatform.android;
+
+  String get _prefsPrefix {
+    final safeModel = modelAssetPath.replaceAll(RegExp(r'[^a-zA-Z0-9]+'), '_');
+    return 'scan.piece_tflite.autotune.$_autoTunePrefsVersion.$safeModel.$inputSize';
+  }
+
+  Future<_RuntimeConfig> _resolveRuntimeConfig() async {
+    final manual = _RuntimeConfig(
+      threads: math.max(1, threads),
+      useNnApi: useNnApiForAndroid && _supportsAutoTune,
+    );
+
+    if (!enableAutoTune || !_supportsAutoTune) {
+      return manual;
+    }
+
+    final stored = await _loadStoredRuntimeConfig();
+    if (stored != null) {
+      if (!kReleaseMode) {
+        debugPrint(
+          '[scan][piece_tflite] autotune_use_cached '
+          'threads=${stored.threads} nnapi=${stored.useNnApi}',
+        );
+      }
+      return stored;
+    }
+
+    final tuned = await _autoTuneBestRuntimeConfig(fallback: manual);
+    await _saveRuntimeConfig(tuned);
+    return tuned;
+  }
+
+  Future<_RuntimeConfig?> _loadStoredRuntimeConfig() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final storedThreads = prefs.getInt('$_prefsPrefix.threads');
+      final storedNnApi = prefs.getBool('$_prefsPrefix.nnapi');
+      if (storedThreads == null || storedThreads <= 0 || storedNnApi == null) {
+        return null;
+      }
+      return _RuntimeConfig(
+        threads: storedThreads,
+        useNnApi: storedNnApi && _supportsAutoTune,
+      );
+    } catch (_) {
+      return null;
+    }
+  }
+
+  Future<void> _saveRuntimeConfig(_RuntimeConfig config) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setInt('$_prefsPrefix.threads', config.threads);
+      await prefs.setBool('$_prefsPrefix.nnapi', config.useNnApi);
+    } catch (_) {
+      // Ignore persistence issues and keep runtime fallback.
+    }
+  }
+
+  Future<_RuntimeConfig> _autoTuneBestRuntimeConfig({
+    required _RuntimeConfig fallback,
+  }) async {
+    final candidates = <_RuntimeConfig>[];
+    final seen = <String>{};
+
+    void addCandidate(_RuntimeConfig config) {
+      final key = '${config.threads}:${config.useNnApi}';
+      if (seen.add(key)) {
+        candidates.add(config);
+      }
+    }
+
+    addCandidate(fallback);
+    for (final candidate in _autoTuneCandidates) {
+      if (candidate.useNnApi && !_supportsAutoTune) {
+        continue;
+      }
+      addCandidate(candidate);
+    }
+
+    var best = fallback;
+    var bestMs = double.infinity;
+
+    for (final candidate in candidates) {
+      final score = await _benchmarkRuntimeConfig(candidate);
+      if (score < bestMs) {
+        best = candidate;
+        bestMs = score;
+      }
+      if (!kReleaseMode) {
+        final pretty = score.isFinite ? score.toStringAsFixed(2) : 'inf';
+        debugPrint(
+          '[scan][piece_tflite] autotune_probe '
+          'threads=${candidate.threads} nnapi=${candidate.useNnApi} '
+          'avg_invoke_ms=$pretty',
+        );
+      }
+    }
+
+    if (!kReleaseMode) {
+      debugPrint(
+        '[scan][piece_tflite] autotune_pick '
+        'threads=${best.threads} nnapi=${best.useNnApi}',
+      );
+    }
+
+    return best;
+  }
+
+  Future<double> _benchmarkRuntimeConfig(_RuntimeConfig config) async {
+    Interpreter? interpreter;
+    try {
+      interpreter = await _createInterpreter(config);
+      _clearTensorCaches();
+      final isBatchReady = _tryConfigureBatchLayout(interpreter);
+      if (!isBatchReady || _inputTensor == null || _batchInputBytes == null) {
+        return double.infinity;
+      }
+
+      final inputTensor = _inputTensor!;
+      final inputBytes = _batchInputBytes!;
+      inputTensor.data = inputBytes;
+      interpreter.invoke(); // warmup
+
+      final runs = math.max(1, autoTuneBenchmarkInvokes);
+      final watch = Stopwatch()..start();
+      for (int i = 0; i < runs; i++) {
+        inputTensor.data = inputBytes;
+        interpreter.invoke();
+      }
+      watch.stop();
+      return watch.elapsedMicroseconds / 1000.0 / runs;
+    } catch (_) {
+      return double.infinity;
+    } finally {
+      interpreter?.close();
+      _clearTensorCaches();
+    }
+  }
+
+  Future<Interpreter> _createInterpreter(_RuntimeConfig config) async {
+    final options = InterpreterOptions()..threads = config.threads;
+    if (config.useNnApi) {
+      options.useNnApiForAndroid = true;
+    }
+    return Interpreter.fromAsset(modelAssetPath, options: options);
+  }
+
+  void _clearTensorCaches() {
+    _inputTensor = null;
+    _outputTensor = null;
+    _batchInputBuffer = null;
+    _batchInputBytes = null;
+    _singleInputBuffer = null;
+    _singleInputBytes = null;
+    _batchInferenceEnabled = false;
+    _inferenceMode = 'uninitialized';
+    _classCount = _classToPiece.length;
   }
 
   void _configureInferenceLayouts(Interpreter interpreter) {
@@ -834,6 +1009,13 @@ class TflitePieceClassifier implements PieceClassifier {
       codec?.dispose();
     }
   }
+}
+
+class _RuntimeConfig {
+  const _RuntimeConfig({required this.threads, required this.useNnApi});
+
+  final int threads;
+  final bool useNnApi;
 }
 
 @immutable
